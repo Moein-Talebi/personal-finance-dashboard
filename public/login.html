@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In - Personal Finance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--primary:#6E54FF;--danger:#EF4444;--text-primary:#1A1A2E;--text-secondary:#64748B}
+    html,body{height:100%;font-family:'Outfit',sans-serif;overflow:hidden}
+    .auth-bg{position:fixed;inset:0;background:linear-gradient(135deg,#1A1040 0%,#2D1B7A 30%,#1A1040 60%,#0F0828 100%);z-index:0}
+    .orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:.4;animation:float 8s ease-in-out infinite}
+    .orb-1{width:450px;height:450px;background:#6E54FF;top:-100px;left:-100px;animation-delay:0s}
+    .orb-2{width:350px;height:350px;background:#A855F7;bottom:-80px;right:10%;animation-delay:-3s}
+    .orb-3{width:250px;height:250px;background:#3B82F6;top:40%;right:-60px;animation-delay:-5s}
+    .orb-4{width:200px;height:200px;background:#EC4899;bottom:20%;left:5%;animation-delay:-2s}
+    @keyframes float{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-30px) scale(1.05)}}
+    .grid-overlay{position:fixed;inset:0;background-image:linear-gradient(rgba(110,84,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(110,84,255,.05) 1px,transparent 1px);background-size:60px 60px;z-index:1}
+    .auth-wrapper{position:relative;z-index:10;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem}
+    .auth-card{width:100%;max-width:440px;background:rgba(255,255,255,.82);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.25);border-radius:28px;padding:2.75rem 2.5rem 2.5rem;box-shadow:0 0 0 1px rgba(110,84,255,.1),0 32px 80px rgba(0,0,0,.35),0 0 60px rgba(110,84,255,.15);animation:slideUp .6s cubic-bezier(.34,1.56,.64,1) both;position:relative}
+    @keyframes slideUp{from{opacity:0;transform:translateY(40px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+    .auth-logo{display:flex;align-items:center;gap:.85rem;margin-bottom:2rem}
+    .auth-logo-icon{width:48px;height:48px;border-radius:14px;background:linear-gradient(135deg,#6E54FF,#A855F7);display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:900;color:#fff;box-shadow:0 8px 24px rgba(110,84,255,.4)}
+    .auth-logo-text h1{font-size:1.3rem;font-weight:800;color:var(--text-primary);letter-spacing:-.03em;line-height:1}
+    .auth-logo-text p{font-size:.8rem;color:var(--text-secondary);font-weight:500;margin-top:2px}
+    .auth-heading{margin-bottom:1.75rem}
+    .auth-heading h2{font-size:1.85rem;font-weight:800;color:var(--text-primary);letter-spacing:-.04em;line-height:1.2}
+    .auth-heading p{font-size:.9rem;color:var(--text-secondary);font-weight:500;margin-top:6px}
+    .form-group{margin-bottom:1.25rem}
+    .form-group label{display:block;font-size:.85rem;font-weight:700;color:var(--text-primary);margin-bottom:8px}
+    .input-wrap{position:relative}
+    .input-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-secondary);font-size:1rem;pointer-events:none}
+    .form-input{width:100%;padding:.85rem 1rem .85rem 2.75rem;font-family:'Outfit',sans-serif;font-size:.95rem;font-weight:500;color:var(--text-primary);background:rgba(255,255,255,.7);border:1.5px solid rgba(110,84,255,.15);border-radius:14px;outline:none;transition:all .2s ease}
+    .form-input:focus{border-color:var(--primary);background:rgba(255,255,255,.92);box-shadow:0 0 0 4px rgba(110,84,255,.12)}
+    .form-input::placeholder{color:#B0B0C8;font-weight:400}
+    .toggle-pw{position:absolute;right:14px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:1.05rem;padding:4px;transition:color .2s}
+    .toggle-pw:hover{color:var(--primary)}
+    .error-msg{display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:12px;padding:.75rem 1rem;font-size:.875rem;font-weight:600;color:var(--danger);margin-bottom:1.25rem;align-items:center;gap:.5rem;animation:shake .4s ease}
+    .error-msg.show{display:flex}
+    @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}
+    .btn-signin{width:100%;padding:.95rem 1.5rem;border:none;border-radius:14px;background:linear-gradient(135deg,#6E54FF 0%,#9333EA 100%);color:#fff;font-family:'Outfit',sans-serif;font-size:1rem;font-weight:700;cursor:pointer;transition:all .25s ease;box-shadow:0 8px 24px rgba(110,84,255,.35);position:relative;overflow:hidden}
+    .btn-signin::after{content:'';position:absolute;inset:0;background:linear-gradient(rgba(255,255,255,.15),transparent)}
+    .btn-signin:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(110,84,255,.45)}
+    .btn-signin:active{transform:translateY(0)}
+    .btn-signin:disabled{opacity:.7;cursor:not-allowed;transform:none}
+    .spinner{display:inline-block;width:18px;height:18px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .auth-footer-note{text-align:center;margin-top:1.5rem;font-size:.8rem;color:var(--text-secondary);font-weight:500}
+    .auth-footer-note strong{color:var(--primary);font-weight:700}
+    .card-accent{position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:80px;height:4px;background:linear-gradient(90deg,#6E54FF,#A855F7);border-radius:4px 4px 0 0}
+  </style>
+</head>
+<body>
+  <div class="auth-bg">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+    <div class="orb orb-4"></div>
+  </div>
+  <div class="grid-overlay"></div>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="auth-logo-icon">&#x1F4B6;</div>
+        <div class="auth-logo-text">
+          <h1>Personal Finance</h1>
+          <p>Secure Account Access</p>
+        </div>
+      </div>
+      <div class="auth-heading">
+        <h2>Welcome back &#x1F44B;</h2>
+        <p>Sign in to your financial dashboard</p>
+      </div>
+      <div class="error-msg" id="error-msg">
+        <span>&#x26A0;</span>
+        <span id="error-text">Invalid email or password. Please try again.</span>
+      </div>
+      <form id="login-form" autocomplete="on">
+        <div class="form-group">
+          <label for="login-email">Email Address</label>
+          <div class="input-wrap">
+            <span class="input-icon">&#x2709;</span>
+            <input type="text" id="login-email" class="form-input" placeholder="moein.talebi" autocomplete="username" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <div class="input-wrap">
+            <span class="input-icon">&#x1F512;</span>
+            <input type="password" id="login-password" class="form-input" placeholder="Enter your password" autocomplete="current-password" required>
+            <button type="button" class="toggle-pw" id="toggle-pw-btn">&#x1F441;</button>
+          </div>
+        </div>
+        <button type="submit" class="btn-signin" id="signin-btn">Sign In to Dashboard</button>
+      </form>
+      <div class="auth-footer-note">Protected finance workspace &nbsp;&middot;&nbsp; <strong>Moein Talebi</strong></div>
+      <div class="card-accent"></div>
+    </div>
+  </div>
+  <script>
+    var CREDS={email:'moein.talebi',password:'123456789',name:'Moein Talebi',initials:'MT'};
+    var form=document.getElementById('login-form');
+    var emailInput=document.getElementById('login-email');
+    var passwordInput=document.getElementById('login-password');
+    var signinBtn=document.getElementById('signin-btn');
+    var errorMsg=document.getElementById('error-msg');
+    var errorText=document.getElementById('error-text');
+    var togglePwBtn=document.getElementById('toggle-pw-btn');
+    togglePwBtn.addEventListener('click',function(){var t=passwordInput.type==='text';passwordInput.type=t?'password':'text';togglePwBtn.innerHTML=t?'&#x1F441;':'&#x1F648;'});
+    form.addEventListener('submit',function(e){
+      e.preventDefault();
+      var email=emailInput.value.trim();
+      var password=passwordInput.value;
+      signinBtn.disabled=true;
+      signinBtn.innerHTML='<span class="spinner"></span> Signing in...';
+      errorMsg.classList.remove('show');
+      setTimeout(function(){
+        if(email===CREDS.email&&password===CREDS.password){
+          localStorage.setItem('auth_token','authenticated');
+          localStorage.setItem('auth_user',JSON.stringify({name:CREDS.name,email:CREDS.email,initials:CREDS.initials}));
+          signinBtn.innerHTML='&#x2713; Authenticated! Redirecting...';
+          setTimeout(function(){window.location.href='/index.html'},500);
+        } else {
+          signinBtn.disabled=false;
+          signinBtn.innerHTML='Sign In to Dashboard';
+          errorText.textContent=email!==CREDS.email?'No account found with this email.':'Incorrect password. Please try again.';
+          errorMsg.classList.add('show');
+        }
+      },900);
+    });
+    emailInput.addEventListener('input',function(){errorMsg.classList.remove('show')});
+    passwordInput.addEventListener('input',function(){errorMsg.classList.remove('show')});
+  </script>
+</body>
+</html>

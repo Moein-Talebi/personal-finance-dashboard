@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personal Finance Dashboard</title>
+  
+  <!-- Google Fonts: Outfit & Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body data-theme="light">
+
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-icon">&#x1F4B6;</div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#dashboard" class="nav-item active" data-page="dashboard">
+          <i data-lucide="layout-dashboard"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#transactions" class="nav-item" data-page="transactions">
+          <i data-lucide="arrow-left-right"></i>
+          <span>Transactions</span>
+        </a>
+        <a href="#budget" class="nav-item" data-page="budget">
+          <i data-lucide="pie-chart"></i>
+          <span>Budgets</span>
+        </a>
+        <a href="#accounts" class="nav-item" data-page="accounts">
+          <i data-lucide="landmark"></i>
+          <span>Wallet</span>
+        </a>
+        <a href="#goals" class="nav-item" data-page="goals">
+          <i data-lucide="target"></i>
+          <span>Goals</span>
+        </a>
+        <a href="#deadlines" class="nav-item" data-page="deadlines">
+          <i data-lucide="calendar-clock"></i>
+          <span>Deadlines</span>
+        </a>
+        <a href="#needs" class="nav-item" data-page="needs">
+          <i data-lucide="calculator"></i>
+          <span>Needs Calc</span>
+        </a>
+        <a href="#debts" class="nav-item" data-page="debts">
+          <i data-lucide="credit-card"></i>
+          <span>Debts</span>
+        </a>
+        <a href="#analytics" class="nav-item" data-page="analytics">
+          <i data-lucide="line-chart"></i>
+          <span>Analytics</span>
+        </a>
+        <a href="#recurring" class="nav-item" data-page="recurring">
+          <i data-lucide="repeat"></i>
+          <span>Recurring</span>
+        </a>
+        <a href="#notifications" class="nav-item" data-page="notifications">
+          <i data-lucide="bell"></i>
+          <span>Notifications</span>
+          <span class="nav-badge" id="unread-notif-badge">0</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-pill" id="user-pill">
+          <div class="avatar" id="user-avatar">MT</div>
+          <div class="user-info">
+            <span class="user-name" id="user-name">Moein Talebi</span>
+            <span class="user-status">Premium Account</span>
+          </div>
+          <button id="logout-btn" title="Sign Out" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);margin-left:auto;padding:4px;transition:color 0.2s;" onmouseover="this.style.color='var(--color-danger)'" onmouseout="this.style.color='var(--text-secondary)'">
+            <i data-lucide="log-out" style="width:16px;height:16px;"></i>
+          </button>
+        </div>
+        <div class="theme-switch-container">
+          <button class="theme-btn active" id="theme-light-btn">
+            <i data-lucide="sun"></i>
+            <span>Light</span>
+          </button>
+          <button class="theme-btn" id="theme-dark-btn">
+            <i data-lucide="moon"></i>
+            <span>Dark</span>
+          </button>
+          <div class="theme-slider"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-wrapper">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="mobile-menu-toggle" class="icon-btn mobile-only">
+            <i data-lucide="menu"></i>
+          </button>
+          <div>
+            <h1 id="page-title">Dashboard</h1>
+            <span class="topbar-subtitle" id="page-subtitle">Welcome back, Moein!</span>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <button class="btn btn-primary" id="global-add-tx-btn">
+            <i data-lucide="plus"></i>
+            <span>Add Transaction</span>
+          </button>
+
+          <a href="#notifications" class="icon-btn notif-bell-btn">
+            <i data-lucide="bell"></i>
+            <span class="dot-badge hidden" id="header-notif-dot"></span>
+          </a>
+        </div>
+      </header>
+
+      <!-- Dynamic Page Container -->
+      <div id="page-content" class="page-container">
+        <!-- Loaded dynamically by router -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Reusable Modal Container -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div id="modal-container" class="modal-box">
+      <!-- Injected by Modal component -->
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/components/toast.js"></script>
+  <script src="/js/components/modal.js"></script>
+
+  <!-- Page Scripts -->
+  <script src="/js/pages/dashboard.js"></script>
+  <script src="/js/pages/transactions.js"></script>
+  <script src="/js/pages/budget.js"></script>
+  <script src="/js/pages/accounts.js"></script>
+  <script src="/js/pages/goals.js"></script>
+  <script src="/js/pages/deadlines.js"></script>
+  <script src="/js/pages/needs.js"></script>
+  <script src="/js/pages/debts.js"></script>
+  <script src="/js/pages/analytics.js"></script>
+  <script src="/js/pages/recurring.js"></script>
+  <script src="/js/pages/notifications.js"></script>
+
+  <!-- Main App Entry -->
+  <script src="/js/app.js"></script>
+
+</body>
+</html>

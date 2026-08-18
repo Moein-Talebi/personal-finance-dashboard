@@ -165,7 +165,7 @@ const TransactionsPage = {
   renderRows(txList) {
     const formatCurrency = (val) => {
       const num = parseFloat(val || 0);
-      return '�' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     };
 
     if (!txList || txList.length === 0) {
@@ -301,7 +301,7 @@ const TransactionsPage = {
         <input type="hidden" id="modal-tx-type" value="expense">
 
         <div class="form-group">
-          <label>Amount ($)</label>
+          <label>Amount (€)</label>
           <input type="number" step="0.01" id="modal-tx-amount" class="form-control" placeholder="0.00" style="font-size:1.5rem; font-weight:800; text-align:center; padding:1rem;" required>
         </div>
 
@@ -309,7 +309,7 @@ const TransactionsPage = {
           <div class="form-group">
             <label>Payment Account</label>
             <select id="modal-tx-account" class="form-control" required>
-              ${this.accounts.map(a => `<option value="${a.id}">${a.name} ($${a.balance.toFixed(2)})</option>`).join('')}
+              ${this.accounts.map(a => `<option value="${a.id}">${a.name} (€${a.balance.toFixed(2)})</option>`).join('')}
             </select>
           </div>
 
@@ -323,7 +323,7 @@ const TransactionsPage = {
           <div class="form-group hidden" id="target-account-group">
             <label>Recipient Account</label>
             <select id="modal-tx-target-account" class="form-control">
-              ${this.accounts.map(a => `<option value="${a.id}">${a.name} ($${a.balance.toFixed(2)})</option>`).join('')}
+              ${this.accounts.map(a => `<option value="${a.id}">${a.name} (€${a.balance.toFixed(2)})</option>`).join('')}
             </select>
           </div>
         </div>

@@ -207,6 +207,15 @@ app.get('/api/needs-calculator', (req, res) => {
 // 4. Debts
 app.get('/api/debts', (req, res) => {
   const debts = queryAll("SELECT * FROM debts ORDER BY current_balance DESC;");
+  for (const d of debts) {
+    d.payments = queryAll(`
+      SELECT dp.*, a.name as account_name 
+      FROM debt_payments dp 
+      LEFT JOIN accounts a ON dp.account_id = a.id 
+      WHERE dp.debt_id = ? 
+      ORDER BY dp.date DESC, dp.id DESC
+    `, [d.id]);
+  }
   res.json(debts);
 });
 
@@ -217,7 +226,9 @@ app.post('/api/debts', (req, res) => {
     "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
     [name, parseFloat(total_amount || 0), currBal, parseFloat(interest_rate || 0), parseFloat(minimum_payment || 0), parseInt(due_day || 1), color || '#EF4444']
   );
-  res.status(201).json(queryOne("SELECT * FROM debts WHERE id = ?", [debtId]));
+  const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  debt.payments = [];
+  res.status(201).json(debt);
 });
 
 app.put('/api/debts/:id', (req, res) => {
@@ -227,30 +238,93 @@ app.put('/api/debts/:id', (req, res) => {
     "UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, color = ? WHERE id = ?",
     [name, parseFloat(total_amount || 0), parseFloat(current_balance || 0), parseFloat(interest_rate || 0), parseFloat(minimum_payment || 0), parseInt(due_day || 1), color || '#EF4444', debtId]
   );
-  res.json(queryOne("SELECT * FROM debts WHERE id = ?", [debtId]));
+  const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  debt.payments = queryAll(`
+    SELECT dp.*, a.name as account_name 
+    FROM debt_payments dp 
+    LEFT JOIN accounts a ON dp.account_id = a.id 
+    WHERE dp.debt_id = ? 
+    ORDER BY dp.date DESC, dp.id DESC
+  `, [debtId]);
+  res.json(debt);
 });
 
 app.put('/api/debts/:id/payment', (req, res) => {
   const debtId = req.params.id;
-  const { amount, account_id } = req.body;
+  const { amount, account_id, date, note } = req.body;
   const paymentAmt = parseFloat(amount || 0);
+  const paymentDate = date || new Date().toISOString().split('T')[0];
+  const paymentNote = note || '';
 
   executeSql("UPDATE debts SET current_balance = MAX(0, current_balance - ?) WHERE id = ?", [paymentAmt, debtId]);
+
+  executeSql(
+    "INSERT INTO debt_payments (debt_id, amount, date, account_id, note) VALUES (?, ?, ?, ?, ?)",
+    [debtId, paymentAmt, paymentDate, account_id ? parseInt(account_id) : null, paymentNote]
+  );
 
   if (account_id) {
     const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
     const catId = cats.length > 0 ? cats[0].id : 1;
     const debt = queryOne("SELECT name FROM debts WHERE id = ?", [debtId]);
     const debtName = debt ? debt.name : 'Debt';
-    const today = new Date().toISOString().split('T')[0];
 
     executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
-      [account_id, catId, paymentAmt, today, `Debt Payment: ${debtName}`]
+      [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
     );
     executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
   }
 
-  res.json(queryOne("SELECT * FROM debts WHERE id = ?", [debtId]));
+  const updatedDebt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  if (updatedDebt) {
+    updatedDebt.payments = queryAll(`
+      SELECT dp.*, a.name as account_name 
+      FROM debt_payments dp 
+      LEFT JOIN accounts a ON dp.account_id = a.id 
+      WHERE dp.debt_id = ? 
+      ORDER BY dp.date DESC, dp.id DESC
+    `, [debtId]);
+  }
+  res.json(updatedDebt);
+});
+
+app.post('/api/debts/:id/payment', (req, res) => {
+  const debtId = req.params.id;
+  const { amount, account_id, date, note } = req.body;
+  const paymentAmt = parseFloat(amount || 0);
+  const paymentDate = date || new Date().toISOString().split('T')[0];
+  const paymentNote = note || '';
+
+  executeSql("UPDATE debts SET current_balance = MAX(0, current_balance - ?) WHERE id = ?", [paymentAmt, debtId]);
+
+  executeSql(
+    "INSERT INTO debt_payments (debt_id, amount, date, account_id, note) VALUES (?, ?, ?, ?, ?)",
+    [debtId, paymentAmt, paymentDate, account_id ? parseInt(account_id) : null, paymentNote]
+  );
+
+  if (account_id) {
+    const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
+    const catId = cats.length > 0 ? cats[0].id : 1;
+    const debt = queryOne("SELECT name FROM debts WHERE id = ?", [debtId]);
+    const debtName = debt ? debt.name : 'Debt';
+
+    executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
+      [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
+    );
+    executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
+  }
+
+  const updatedDebt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  if (updatedDebt) {
+    updatedDebt.payments = queryAll(`
+      SELECT dp.*, a.name as account_name 
+      FROM debt_payments dp 
+      LEFT JOIN accounts a ON dp.account_id = a.id 
+      WHERE dp.debt_id = ? 
+      ORDER BY dp.date DESC, dp.id DESC
+    `, [debtId]);
+  }
+  res.json(updatedDebt);
 });
 
 app.delete('/api/debts/:id', (req, res) => {
@@ -485,8 +559,24 @@ app.post('/api/recurring', (req, res) => {
 
 app.put('/api/recurring/:id', (req, res) => {
   const recId = req.params.id;
-  const active = req.body.active ? 1 : 0;
-  executeSql("UPDATE recurring SET active = ? WHERE id = ?", [active, recId]);
+  const current = queryOne("SELECT * FROM recurring WHERE id = ?", [recId]);
+  if (!current) return res.status(404).json({ error: "Item not found" });
+
+  const active = req.body.active !== undefined ? (req.body.active ? 1 : 0) : current.active;
+  const next_due = req.body.next_due || current.next_due;
+  const amount = req.body.amount !== undefined ? parseFloat(req.body.amount) : current.amount;
+  const name = req.body.name || current.name;
+  const account_id = req.body.account_id ? parseInt(req.body.account_id) : current.account_id;
+  const category_id = req.body.category_id ? parseInt(req.body.category_id) : current.category_id;
+  const frequency = req.body.frequency || current.frequency;
+  const type = req.body.type || current.type;
+
+  executeSql(`
+    UPDATE recurring 
+    SET active = ?, next_due = ?, amount = ?, name = ?, account_id = ?, category_id = ?, frequency = ?, type = ?
+    WHERE id = ?
+  `, [active, next_due, amount, name, account_id, category_id, frequency, type, recId]);
+
   res.json(queryOne("SELECT * FROM recurring WHERE id = ?", [recId]));
 });
 

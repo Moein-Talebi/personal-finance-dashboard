@@ -22,6 +22,14 @@ def handle_api_request(method, path, body, query_params):
     if resource == 'debts':
         if method == 'GET':
             debts = query_all("SELECT * FROM debts ORDER BY current_balance DESC;")
+            for d in debts:
+                d['payments'] = query_all("""
+                    SELECT dp.*, a.name as account_name 
+                    FROM debt_payments dp 
+                    LEFT JOIN accounts a ON dp.account_id = a.id 
+                    WHERE dp.debt_id = ? 
+                    ORDER BY dp.date DESC, dp.id DESC
+                """, (d['id'],))
             return {"status": 200, "data": debts}
         elif method == 'POST':
             name = body.get('name')
@@ -35,25 +43,41 @@ def handle_api_request(method, path, body, query_params):
                 "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color)
             )
-            return {"status": 201, "data": query_one("SELECT * FROM debts WHERE id = ?", (debt_id,))}
-        elif method == 'PUT' and resource_id:
+            debt = query_one("SELECT * FROM debts WHERE id = ?", (debt_id,))
+            debt['payments'] = []
+            return {"status": 201, "data": debt}
+        elif (method == 'PUT' or method == 'POST') and resource_id:
             if action == 'payment':
                 amount = float(body.get('amount', 0))
                 account_id = body.get('account_id')
+                date_str = body.get('date', datetime.now().strftime('%Y-%m-%d'))
+                note_str = body.get('note', '')
+
                 execute_sql("UPDATE debts SET current_balance = MAX(0, current_balance - ?) WHERE id = ?", (amount, resource_id))
-                
-                # Optionally deduct from bank account & create transaction record
+
+                execute_sql("INSERT INTO debt_payments (debt_id, amount, date, account_id, note) VALUES (?, ?, ?, ?, ?)",
+                            (resource_id, amount, date_str, int(account_id) if account_id else None, note_str))
+
                 if account_id:
                     cats = query_all("SELECT id FROM categories WHERE type = 'expense';")
                     cat_id = cats[0]['id'] if cats else 1
                     debt = query_one("SELECT name FROM debts WHERE id = ?", (resource_id,))
                     debt_name = debt['name'] if debt else 'Debt'
-                    today = datetime.now().strftime('%Y-%m-%d')
+                    tx_note = f"Debt Payment: {debt_name}" + (f" - {note_str}" if note_str else "")
                     execute_sql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
-                                (account_id, cat_id, amount, today, f"Debt Payment: {debt_name}"))
+                                (account_id, cat_id, amount, date_str, tx_note))
                     execute_sql("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, account_id))
 
-                return {"status": 200, "data": query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))}
+                updated_debt = query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))
+                if updated_debt:
+                    updated_debt['payments'] = query_all("""
+                        SELECT dp.*, a.name as account_name 
+                        FROM debt_payments dp 
+                        LEFT JOIN accounts a ON dp.account_id = a.id 
+                        WHERE dp.debt_id = ? 
+                        ORDER BY dp.date DESC, dp.id DESC
+                    """, (resource_id,))
+                return {"status": 200, "data": updated_debt}
             else:
                 name = body.get('name')
                 total_amount = float(body.get('total_amount', 0))
@@ -64,7 +88,16 @@ def handle_api_request(method, path, body, query_params):
                 color = body.get('color', '#EF4444')
                 execute_sql("UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, color = ? WHERE id = ?",
                             (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color, resource_id))
-                return {"status": 200, "data": query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))}
+                updated_debt = query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))
+                if updated_debt:
+                    updated_debt['payments'] = query_all("""
+                        SELECT dp.*, a.name as account_name 
+                        FROM debt_payments dp 
+                        LEFT JOIN accounts a ON dp.account_id = a.id 
+                        WHERE dp.debt_id = ? 
+                        ORDER BY dp.date DESC, dp.id DESC
+                    """, (resource_id,))
+                return {"status": 200, "data": updated_debt}
         elif method == 'DELETE' and resource_id:
             execute_sql("DELETE FROM debts WHERE id = ?", (resource_id,))
             return {"status": 200, "data": {"message": "Debt deleted"}}
@@ -283,8 +316,22 @@ def handle_api_request(method, path, body, query_params):
             )
             return {"status": 201, "data": query_one("SELECT * FROM recurring WHERE id = ?", (rec_id,))}
         elif method == 'PUT' and resource_id:
-            active = 1 if body.get('active') else 0
-            execute_sql("UPDATE recurring SET active = ? WHERE id = ?", (active, resource_id))
+            current = query_one("SELECT * FROM recurring WHERE id = ?", (resource_id,))
+            if not current:
+                return {"status": 404, "data": {"error": "Item not found"}}
+            active = (1 if body['active'] else 0) if 'active' in body else current['active']
+            next_due = body.get('next_due', current['next_due'])
+            amount = float(body.get('amount', current['amount']))
+            name = body.get('name', current['name'])
+            account_id = int(body.get('account_id', current['account_id']))
+            category_id = int(body.get('category_id', current['category_id']))
+            frequency = body.get('frequency', current['frequency'])
+            rec_type = body.get('type', current['type'])
+            execute_sql("""
+                UPDATE recurring 
+                SET active = ?, next_due = ?, amount = ?, name = ?, account_id = ?, category_id = ?, frequency = ?, type = ?
+                WHERE id = ?
+            """, (active, next_due, amount, name, account_id, category_id, frequency, rec_type, resource_id))
             return {"status": 200, "data": query_one("SELECT * FROM recurring WHERE id = ?", (resource_id,))}
         elif method == 'DELETE' and resource_id:
             execute_sql("DELETE FROM recurring WHERE id = ?", (resource_id,))

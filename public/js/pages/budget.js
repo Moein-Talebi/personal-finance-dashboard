@@ -21,7 +21,7 @@ const BudgetPage = {
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return 'â‚¬' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
       // Aggregates

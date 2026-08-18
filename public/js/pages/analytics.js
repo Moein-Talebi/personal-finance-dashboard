@@ -10,7 +10,7 @@ const AnalyticsPage = {
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return '�' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
       const getThemeColor = (variable) => getComputedStyle(document.body).getPropertyValue(variable).trim();
@@ -25,8 +25,7 @@ const AnalyticsPage = {
           </div>
 
           <div class="chip-grid">
-            <div class="chip-tag active">USD ($)</div>
-            <div class="chip-tag">EUR (€)</div>
+            <div class="chip-tag active">EUR (€)</div>
           </div>
         </div>
 
@@ -35,7 +34,7 @@ const AnalyticsPage = {
           <div style="display:flex; align-items:center; gap:0.85rem;">
             <div style="color:var(--color-primary);"><i data-lucide="info" style="width:24px; height:24px;"></i></div>
             <div style="font-weight:700; font-size:0.95rem;">
-              You have extra <span style="color:var(--color-primary); font-weight:800;">$1,700</span> saved compared to last month! You are well within your budgets.
+              You have extra <span style="color:var(--color-primary); font-weight:800;">€1.700,00</span> saved compared to last month! You are well within your budgets.
             </div>
           </div>
         </div>

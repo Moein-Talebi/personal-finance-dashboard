@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS debts (
   interest_rate REAL DEFAULT 0.0,
   minimum_payment REAL DEFAULT 0.0,
   due_day INTEGER DEFAULT 1,
+  next_payment_date TEXT DEFAULT NULL,
   color TEXT DEFAULT '#EF4444',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -227,8 +228,15 @@ Calculates 50/30/20 budget ratios: expected_income, survival_cost, fixed_needs, 
 - PUT /api/categories/:id -> UPDATE same fields
 - DELETE /api/categories/:id -> DELETE
 
-#### Transactions CRUD + Export
+#### Transactions CRUD + Export + Import
 - GET /api/transactions/export -> CSV download (Content-Disposition: attachment)
+- POST /api/transactions/import -> Bulk/CSV transaction import:
+  - Resolves account_id (by ID or account name match, with fallback)
+  - Resolves category_id (by ID, category name match, or type match)
+  - Supports ISO YYYY-MM-DD or European DD/MM/YYYY date formats
+  - Adjusts account balances dynamically
+  - Checks budget alert for imported expense records
+  - Executed inside atomic database transaction
 - GET /api/transactions -> Dynamic WHERE with filters: account_id, category_id, type, start_date, end_date
 - POST /api/transactions -> INSERT + balance update:
   - income: account balance += amount
@@ -259,16 +267,17 @@ Calculates 50/30/20 budget ratios: expected_income, survival_cost, fixed_needs, 
 
 #### Debts CRUD + Payments
 - GET /api/debts -> SELECT * ORDER BY current_balance DESC, with nested payments[] per debt
-- POST /api/debts -> INSERT {name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color}
+- POST /api/debts -> INSERT {name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color}
 - PUT /api/debts/:id -> UPDATE same fields
 - PUT/POST /api/debts/:id/payment -> Business logic:
   1. UPDATE debts SET current_balance = MAX(0, current_balance - amount)
   2. INSERT INTO debt_payments
-  3. If account_id provided: creates expense transaction + deducts account balance
+  3. If account_id provided: resolves category_id, creates expense transaction in `transactions`, deducts account balance in `accounts`, and invokes `checkBudgetAlert(cat_id)` to evaluate budget thresholds
+  4. Auto-advances `next_payment_date` by 1 month for bank/installment loans (`interest_rate > 0` or `minimum_payment > 0`) if remaining balance > 0, else sets NULL
 - DELETE /api/debts/:id -> DELETE (cascades payments)
 
 #### Notifications
-- GET /api/notifications -> SELECT * ORDER BY id DESC LIMIT 50
+- GET /api/notifications -> Triggers `checkDebtPaymentAlerts()`, SELECT * ORDER BY id DESC LIMIT 50
 - PUT /api/notifications/:id/read -> UPDATE read=1
 - POST /api/notifications/read-all -> UPDATE read=1 for all
 

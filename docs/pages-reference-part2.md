@@ -46,16 +46,16 @@
 - `GET /api/debts` (includes nested payments[])
 - `GET /api/accounts`
 - `DELETE /api/debts/${id}` (with confirm)
-- `PUT /api/debts/${id}` body: `{ name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color }`
+- `PUT /api/debts/${id}` body: `{ name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color }`
 - `POST /api/debts` body: same
-- `POST /api/debts/${id}/payment` body: `{ amount, account_id, date, note }`
+- `POST /api/debts/${id}/payment` body: `{ amount, account_id, date, note }` (auto-advances `next_payment_date` by 1 month for loans)
 
 ### Debt Modal
 - Title: 'Edit Debt: {name}' or 'Add Debt / Borrowed Money Record'
 - Quick Setup Presets (only when adding new):
-  - `#preset-borrowed-friend`: "Borrowed from Friend (0% Interest)" -> rate=0, color=#3B82F6
-  - `#preset-bank-loan`: "Bank Loan / Credit Card" -> rate=7.5, color=#EF4444
-- Fields: name, total borrowed, remaining balance, interest rate APR%, monthly installment target, due day (1-31), color
+  - `#preset-borrowed-friend`: "Borrowed from Friend (0% Interest)" -> rate=0, color=#3B82F6, clears next_payment_date
+  - `#preset-bank-loan`: "Bank Loan / Credit Card" -> rate=7.5, color=#EF4444, next_payment_date=today + 1 month
+- Fields: name, total borrowed, remaining balance, interest rate APR%, monthly installment target, due day (1-31), next payment date (YYYY-MM-DD, scoped to bank/installment loans), color
 - Total input auto-syncs to balance input unless manually edited (`dataset.manual`)
 - Validation: name required, total > 0
 
@@ -63,24 +63,34 @@
 - Title: 'Record Installment Payment: {name}'
 - Save text: 'Confirm Payment'
 - Shows debt summary (name, total borrowed, remaining balance)
-- Fields: payment amount (default: min(minimum_payment, current_balance)), date, paying account (select with cash/direct option), memo
+- Fields: payment amount (default: min(minimum_payment, current_balance)), date, paying account (select with cash/direct option), budget expense category (prefilled with debt/loan category), memo
 - Validation: amount > 0
 - Overpayment check: if amount > current_balance + 0.01, confirms with user
-- After payment: sets `expandedHistories[id] = true` to auto-expand log
+- After payment: sets `expandedHistories[id] = true` to auto-expand log, calls `window.updateNotificationBadges()` to update real-time alerts
 
 ### DOM Structure
 - Header with `#add-debt-btn`
-- Stats (`.grid-cols-4`): Total Remaining Debt (danger icon), Monthly Minimum Payments (warning icon)
-- Debt cards grid (`.grid-cols-2`):
-  - Empty state: check-circle-2 icon, "No Debt Records" message
-  - Each card: icon (landmark if APR>0, else hand-coins), name, APR badge, Paid Off badge (if balance<=0), edit/delete btns, remaining vs original, progress bar (success color), paid off %, installment target, toggle history btn, pay installment btn (disabled if paid off)
+- **Hero Overview Summary Banner**:
+  - Left: Total Remaining Debt (large hero number with original amount), Overall Repayment Progress bar (% repaid and € paid down), Active accounts count, Monthly minimum obligation.
+  - Right: Short-term Cash Needed (Next 10 Days) highlight box with due countdown, urgent badge, and earliest due date.
+- **Dedicated 10-Day Urgent Action Strip**:
+  - Horizontal quick-action pills for debts arriving within 10 days, showing days overdue/remaining, due date, amount, and direct 1-click "Pay" button.
+- **Quick Filter Tabs**:
+  - All Debts, Due in 10 Days, Personal Loans (0% APR), Bank Loans (APR > 0), Paid Off.
+- **Debt cards grid (`.grid-cols-2`)**:
+  - Filtered dynamically based on the selected tab and sorted by date of arriving.
+  - Empty state with customized messages per filter tab.
+  - Each card: icon (landmark if APR>0, else hand-coins), name, APR badge, Paid Off badge (if balance<=0), edit/delete btns, remaining vs original, progress bar (success color), paid off %, installment target, next payment date status badge, toggle history btn, pay installment btn (disabled if paid off)
   - Expandable history log: payment entries with date, source account, memo, negative green amount
 
 ### Computed Values
+- totalOriginalDebt: sum of total_amount
 - totalDebt: sum of current_balance
+- totalPaidDown: totalOriginalDebt - totalDebt
+- overallPct: round((totalPaidDown / totalOriginalDebt) * 100)
 - totalMinPayments: sum of minimum_payment
-- paidDown: total_amount - current_balance
-- pct: round((paidDown / total_amount) * 100)
+- neededNext10Days: sum of required payments due within the next 10 days (including overdue)
+- currentFilter: active tab filter ('all', 'due10', 'personal', 'bank', 'paid')
 - isFullyPaid: current_balance <= 0
 - defaultPaymentAmount: min(minimum_payment, current_balance) or current_balance if no min
 

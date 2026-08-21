@@ -129,6 +129,29 @@ def init_db():
     if 'expense_type' not in cols:
         cursor.execute("ALTER TABLE categories ADD COLUMN expense_type TEXT DEFAULT 'variable';")
 
+    # Alter debts table if next_payment_date column missing
+    cursor.execute("PRAGMA table_info(debts);")
+    debt_cols = [r['name'] for r in cursor.fetchall()]
+    if 'next_payment_date' not in debt_cols:
+        cursor.execute("ALTER TABLE debts ADD COLUMN next_payment_date TEXT DEFAULT NULL;")
+
+    # Clear next_payment_date for non-loan borrowed money (0% interest & 0 min payment)
+    cursor.execute("UPDATE debts SET next_payment_date = NULL WHERE (interest_rate IS NULL OR interest_rate = 0) AND (minimum_payment IS NULL OR minimum_payment = 0);")
+
+    # Auto-populate next_payment_date for existing loan debts if null
+    today_dt = datetime.now()
+    today_str = today_dt.strftime('%Y-%m-%d')
+    cursor.execute("SELECT id, due_day FROM debts WHERE next_payment_date IS NULL AND current_balance > 0 AND (interest_rate > 0 OR minimum_payment > 0);")
+    debts_no_date = cursor.fetchall()
+    for d in debts_no_date:
+        due_day = min(max(int(d['due_day'] or 1), 1), 28)
+        target = datetime(today_dt.year, today_dt.month, due_day)
+        if target.strftime('%Y-%m-%d') < today_str:
+            month = today_dt.month % 12 + 1
+            year = today_dt.year + (1 if today_dt.month == 12 else 0)
+            target = datetime(year, month, due_day)
+        cursor.execute("UPDATE debts SET next_payment_date = ? WHERE id = ?;", (target.strftime('%Y-%m-%d'), d['id']))
+
     # Upgrade existing DB data if needed
     cursor.execute("UPDATE categories SET expense_type = 'fixed' WHERE name IN ('Housing & Rent', 'Utilities & Internet');")
     cursor.execute("UPDATE categories SET expense_type = 'discretionary' WHERE name IN ('Dining Out', 'Entertainment & Subscriptions');")

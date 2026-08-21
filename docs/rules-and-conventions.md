@@ -27,11 +27,15 @@
 - Any schema change in db.js MUST be mirrored in db.py
 - Same SQL queries, same business logic, same response format
 
-### 4. Architecture Doc Updates
-**After EVERY set of changes, update the architecture.md and relevant reference docs.**
-- Located at: `C:\Users\moein\.gemini\antigravity\brain\b77de5e1-6d87-4618-9937-7d20fa40b3ac\architecture.md`
-- This is the single source of truth for future agents
-- Update relevant sections: file tree, DB schema, API endpoints, cross-connections, etc.
+### 4. Mandatory Documentation Updates
+**After EVERY set of changes, immediately update the relevant `.md` reference docs in `docs/`:**
+- `docs/pages-reference-part1.md` for `dashboard.js`, `transactions.js`, `budget.js`, `accounts.js`, `goals.js`, `deadlines.js`
+- `docs/pages-reference-part2.md` for `needs.js`, `debts.js`, `analytics.js`, `recurring.js`, `notifications.js`
+- `docs/backend-reference.md` and `docs/architecture.md` for server, API, routes, and DB schema changes
+- `docs/frontend-core-reference.md` for router, app shell, or modal/toast component changes
+- `docs/styles-reference.md` for CSS and theme changes
+- `docs/rules-and-conventions.md` and root `GEMINI.md` / `AGENTS.md` for rules and conventions
+- This keeps the documentation permanently in sync with the codebase.
 
 ---
 

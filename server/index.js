@@ -204,6 +204,68 @@ app.get('/api/needs-calculator', (req, res) => {
   });
 });
 
+// Debt Payment Helpers
+function computeNextPaymentDate(dueDay) {
+  const now = new Date();
+  const day = Math.min(Math.max(parseInt(dueDay, 10) || 1, 1), 28);
+  let target = new Date(now.getFullYear(), now.getMonth(), day);
+  const todayStr = now.toISOString().split('T')[0];
+  if (target.toISOString().split('T')[0] < todayStr) {
+    target = new Date(now.getFullYear(), now.getMonth() + 1, day);
+  }
+  return target.toISOString().split('T')[0];
+}
+
+function advanceOneMonth(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split('-');
+  let year = parseInt(parts[0], 10);
+  let month = parseInt(parts[1], 10) - 1;
+  let day = parseInt(parts[2], 10);
+
+  month += 1;
+  if (month > 11) {
+    month = 0;
+    year += 1;
+  }
+  const maxDays = new Date(year, month + 1, 0).getDate();
+  const clampedDay = Math.min(day, maxDays);
+  const target = new Date(year, month, clampedDay);
+  return target.toISOString().split('T')[0];
+}
+
+function checkDebtPaymentAlerts() {
+  const debts = queryAll("SELECT * FROM debts WHERE current_balance > 0 AND next_payment_date IS NOT NULL AND next_payment_date != '';");
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayMs = new Date(todayStr).getTime();
+
+  for (const d of debts) {
+    const dueMs = new Date(d.next_payment_date).getTime();
+    const diffDays = Math.round((dueMs - todayMs) / (1000 * 60 * 60 * 24));
+    const amountStr = `€${(d.minimum_payment > 0 ? d.minimum_payment : d.current_balance).toFixed(2)}`;
+
+    if (diffDays < 0) {
+      const msg = `${d.name} payment of ${amountStr} was due on ${d.next_payment_date}`;
+      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", [msg]);
+      if (!existing) {
+        executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", [msg]);
+      }
+    } else if (diffDays === 0) {
+      const msg = `${d.name} payment of ${amountStr} is due today`;
+      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", [msg]);
+      if (!existing) {
+        executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", [msg]);
+      }
+    } else if (diffDays <= 3) {
+      const msg = `${d.name} payment of ${amountStr} is due in ${diffDays} day(s) on ${d.next_payment_date}`;
+      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", [msg]);
+      if (!existing) {
+        executeSql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", [msg]);
+      }
+    }
+  }
+}
+
 // 4. Debts
 app.get('/api/debts', (req, res) => {
   const debts = queryAll("SELECT * FROM debts ORDER BY current_balance DESC;");
@@ -220,11 +282,23 @@ app.get('/api/debts', (req, res) => {
 });
 
 app.post('/api/debts', (req, res) => {
-  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color } = req.body;
+  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
   const currBal = current_balance !== undefined ? parseFloat(current_balance) : parseFloat(total_amount);
+  const dueDayVal = parseInt(due_day || 1, 10);
+  const rateVal = parseFloat(interest_rate || 0);
+  const minVal = parseFloat(minimum_payment || 0);
+  const isLoan = rateVal > 0 || minVal > 0 || !!next_payment_date;
+
+  let nextDate = next_payment_date;
+  if (isLoan && !nextDate && currBal > 0) {
+    nextDate = computeNextPaymentDate(dueDayVal);
+  } else if (!isLoan) {
+    nextDate = null;
+  }
+
   const debtId = executeSql(
-    "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [name, parseFloat(total_amount || 0), currBal, parseFloat(interest_rate || 0), parseFloat(minimum_payment || 0), parseInt(due_day || 1), color || '#EF4444']
+    "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [name, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || '#EF4444']
   );
   const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
   debt.payments = [];
@@ -233,10 +307,23 @@ app.post('/api/debts', (req, res) => {
 
 app.put('/api/debts/:id', (req, res) => {
   const debtId = req.params.id;
-  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color } = req.body;
+  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
+  const currBal = parseFloat(current_balance || 0);
+  const dueDayVal = parseInt(due_day || 1, 10);
+  const rateVal = parseFloat(interest_rate || 0);
+  const minVal = parseFloat(minimum_payment || 0);
+  const isLoan = rateVal > 0 || minVal > 0 || !!next_payment_date;
+
+  let nextDate = next_payment_date;
+  if (isLoan && !nextDate && currBal > 0) {
+    nextDate = computeNextPaymentDate(dueDayVal);
+  } else if (!isLoan || currBal <= 0) {
+    nextDate = null;
+  }
+
   executeSql(
-    "UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, color = ? WHERE id = ?",
-    [name, parseFloat(total_amount || 0), parseFloat(current_balance || 0), parseFloat(interest_rate || 0), parseFloat(minimum_payment || 0), parseInt(due_day || 1), color || '#EF4444', debtId]
+    "UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, next_payment_date = ?, color = ? WHERE id = ?",
+    [name, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || '#EF4444', debtId]
   );
   const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
   debt.payments = queryAll(`
@@ -249,9 +336,7 @@ app.put('/api/debts/:id', (req, res) => {
   res.json(debt);
 });
 
-app.put('/api/debts/:id/payment', (req, res) => {
-  const debtId = req.params.id;
-  const { amount, account_id, date, note } = req.body;
+function handleDebtPayment(debtId, amount, account_id, date, note, category_id) {
   const paymentAmt = parseFloat(amount || 0);
   const paymentDate = date || new Date().toISOString().split('T')[0];
   const paymentNote = note || '';
@@ -264,8 +349,17 @@ app.put('/api/debts/:id/payment', (req, res) => {
   );
 
   if (account_id) {
-    const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
-    const catId = cats.length > 0 ? cats[0].id : 1;
+    let catId = category_id ? parseInt(category_id) : null;
+    if (!catId) {
+      const debtCat = queryOne("SELECT id FROM categories WHERE type = 'expense' AND (LOWER(name) LIKE '%debt%' OR LOWER(name) LIKE '%loan%');");
+      if (debtCat) {
+        catId = debtCat.id;
+      } else {
+        const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
+        catId = cats.length > 0 ? cats[0].id : 1;
+      }
+    }
+
     const debt = queryOne("SELECT name FROM debts WHERE id = ?", [debtId]);
     const debtName = debt ? debt.name : 'Debt';
 
@@ -273,6 +367,21 @@ app.put('/api/debts/:id/payment', (req, res) => {
       [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
     );
     executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
+    
+    // Ripple Effect: Check if payment triggers budget warning/exceeded notification
+    checkBudgetAlert(catId);
+  }
+
+  // Auto-advance next_payment_date if debt is still active and is a bank/installment loan
+  const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  if (debt) {
+    const isLoan = debt.interest_rate > 0 || debt.minimum_payment > 0;
+    if (debt.current_balance <= 0 || !isLoan) {
+      executeSql("UPDATE debts SET next_payment_date = NULL WHERE id = ?", [debtId]);
+    } else if (debt.next_payment_date) {
+      const advancedDate = advanceOneMonth(debt.next_payment_date);
+      executeSql("UPDATE debts SET next_payment_date = ? WHERE id = ?", [advancedDate, debtId]);
+    }
   }
 
   const updatedDebt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
@@ -285,45 +394,20 @@ app.put('/api/debts/:id/payment', (req, res) => {
       ORDER BY dp.date DESC, dp.id DESC
     `, [debtId]);
   }
+  return updatedDebt;
+}
+
+app.put('/api/debts/:id/payment', (req, res) => {
+  const debtId = req.params.id;
+  const { amount, account_id, date, note, category_id } = req.body;
+  const updatedDebt = handleDebtPayment(debtId, amount, account_id, date, note, category_id);
   res.json(updatedDebt);
 });
 
 app.post('/api/debts/:id/payment', (req, res) => {
   const debtId = req.params.id;
-  const { amount, account_id, date, note } = req.body;
-  const paymentAmt = parseFloat(amount || 0);
-  const paymentDate = date || new Date().toISOString().split('T')[0];
-  const paymentNote = note || '';
-
-  executeSql("UPDATE debts SET current_balance = MAX(0, current_balance - ?) WHERE id = ?", [paymentAmt, debtId]);
-
-  executeSql(
-    "INSERT INTO debt_payments (debt_id, amount, date, account_id, note) VALUES (?, ?, ?, ?, ?)",
-    [debtId, paymentAmt, paymentDate, account_id ? parseInt(account_id) : null, paymentNote]
-  );
-
-  if (account_id) {
-    const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
-    const catId = cats.length > 0 ? cats[0].id : 1;
-    const debt = queryOne("SELECT name FROM debts WHERE id = ?", [debtId]);
-    const debtName = debt ? debt.name : 'Debt';
-
-    executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
-      [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
-    );
-    executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
-  }
-
-  const updatedDebt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
-  if (updatedDebt) {
-    updatedDebt.payments = queryAll(`
-      SELECT dp.*, a.name as account_name 
-      FROM debt_payments dp 
-      LEFT JOIN accounts a ON dp.account_id = a.id 
-      WHERE dp.debt_id = ? 
-      ORDER BY dp.date DESC, dp.id DESC
-    `, [debtId]);
-  }
+  const { amount, account_id, date, note, category_id } = req.body;
+  const updatedDebt = handleDebtPayment(debtId, amount, account_id, date, note, category_id);
   res.json(updatedDebt);
 });
 
@@ -488,6 +572,108 @@ app.get('/api/transactions', (req, res) => {
   res.json(txs);
 });
 
+app.post('/api/transactions/import', (req, res) => {
+  const list = Array.isArray(req.body) ? req.body : (req.body.transactions || []);
+  if (!Array.isArray(list) || list.length === 0) {
+    return res.status(400).json({ error: "No transactions provided for import" });
+  }
+
+  const allAccounts = queryAll("SELECT * FROM accounts;");
+  const allCategories = queryAll("SELECT * FROM categories;");
+
+  if (allAccounts.length === 0 || allCategories.length === 0) {
+    return res.status(400).json({ error: "Cannot import transactions without existing accounts and categories" });
+  }
+
+  const inserted = [];
+  const checkedCategories = new Set();
+
+  const insertTransaction = db.transaction((items) => {
+    for (const item of items) {
+      let accId = null;
+      if (item.account_id) {
+        const found = allAccounts.find(a => a.id === parseInt(item.account_id));
+        if (found) accId = found.id;
+      }
+      if (!accId && (item.account_name || item.account)) {
+        const nameQuery = String(item.account_name || item.account).trim().toLowerCase();
+        const found = allAccounts.find(a => a.name.toLowerCase() === nameQuery);
+        if (found) accId = found.id;
+      }
+      if (!accId) {
+        accId = allAccounts[0].id;
+      }
+
+      let txType = (item.type || 'expense').toLowerCase();
+      if (!['income', 'expense', 'transfer'].includes(txType)) {
+        txType = 'expense';
+      }
+
+      let catId = null;
+      if (item.category_id) {
+        const found = allCategories.find(c => c.id === parseInt(item.category_id));
+        if (found) catId = found.id;
+      }
+      if (!catId && (item.category_name || item.category)) {
+        const catQuery = String(item.category_name || item.category).trim().toLowerCase();
+        const found = allCategories.find(c => c.name.toLowerCase() === catQuery);
+        if (found) catId = found.id;
+      }
+      if (!catId) {
+        const matchingTypeCat = allCategories.find(c => c.type === txType);
+        catId = matchingTypeCat ? matchingTypeCat.id : allCategories[0].id;
+      }
+
+      const txAmt = Math.abs(parseFloat(item.amount || 0));
+      if (isNaN(txAmt) || txAmt <= 0) continue;
+
+      let txDate = item.date || new Date().toISOString().split('T')[0];
+      if (/^\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{4}$/.test(txDate)) {
+        const parts = txDate.split(/[\/\.\-]/);
+        txDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+
+      const txNote = item.note || item.memo || item.description || '';
+      const targetAccId = item.target_account_id ? parseInt(item.target_account_id) : null;
+
+      const txId = executeSql(
+        "INSERT INTO transactions (account_id, category_id, amount, type, date, note, target_account_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [accId, catId, txAmt, txType, txDate, txNote, targetAccId]
+      );
+
+      // Update account balance
+      if (txType === 'income') {
+        executeSql("UPDATE accounts SET balance = balance + ? WHERE id = ?", [txAmt, accId]);
+      } else if (txType === 'expense') {
+        executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [txAmt, accId]);
+      } else if (txType === 'transfer' && targetAccId) {
+        executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [txAmt, accId]);
+        executeSql("UPDATE accounts SET balance = balance + ? WHERE id = ?", [txAmt, targetAccId]);
+      }
+
+      if (txType === 'expense') {
+        checkedCategories.add(catId);
+      }
+
+      inserted.push(txId);
+    }
+  });
+
+  try {
+    insertTransaction(list);
+    for (const catId of checkedCategories) {
+      checkBudgetAlert(catId);
+    }
+    return res.status(201).json({
+      success: true,
+      message: `Successfully imported ${inserted.length} transactions`,
+      count: inserted.length
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/transactions', (req, res) => {
   const { account_id, category_id, amount, type, date, note, target_account_id } = req.body;
   const accId = parseInt(account_id);
@@ -627,6 +813,7 @@ app.delete('/api/goals/:id', (req, res) => {
 
 // 11. Notifications
 app.get('/api/notifications', (req, res) => {
+  checkDebtPaymentAlerts();
   res.json(queryAll("SELECT * FROM notifications ORDER BY id DESC LIMIT 50;"));
 });
 

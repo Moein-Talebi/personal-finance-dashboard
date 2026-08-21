@@ -1,33 +1,127 @@
 const DebtTrackerPage = {
   debts: [],
   accounts: [],
+  categories: [],
   expandedHistories: {},
+  currentFilter: 'all',
+
+  getEffectiveDueDate(debt) {
+    if (debt.next_payment_date) return debt.next_payment_date;
+    if (debt.due_day && (debt.current_balance || 0) > 0) {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const dueDay = Math.min(Math.max(parseInt(debt.due_day, 10) || 1, 1), 28);
+      let target = new Date(currentYear, currentMonth, dueDay);
+      const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const targetStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+      if (targetStr < todayStr) {
+        target = new Date(currentYear, currentMonth + 1, dueDay);
+      }
+      return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+    }
+    return null;
+  },
+
+  getDaysDifference(targetDateStr) {
+    if (!targetDateStr) return null;
+    const [tYear, tMonth, tDay] = targetDateStr.split('-').map(Number);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const target = new Date(tYear, tMonth - 1, tDay);
+    return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  },
 
   async render(container) {
     container.innerHTML = `<div class="loading-spinner">Loading debt payoff tracker...</div>`;
 
     try {
-      const [debtRes, acctRes] = await Promise.all([
+      const [debtRes, acctRes, catRes] = await Promise.all([
         API.get('/api/debts'),
-        API.get('/api/accounts')
+        API.get('/api/accounts'),
+        API.get('/api/categories')
       ]);
 
-      this.debts = debtRes;
-      this.accounts = acctRes;
+      this.debts = debtRes || [];
+      this.accounts = acctRes || [];
+      this.categories = (catRes || []).filter(c => c.type === 'expense');
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
         return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
+      // Sort debts based on date of arriving (earliest upcoming payment first, paid off at the end)
+      this.debts.sort((a, b) => {
+        const aPaid = (a.current_balance || 0) <= 0;
+        const bPaid = (b.current_balance || 0) <= 0;
+
+        if (aPaid && !bPaid) return 1;
+        if (!aPaid && bPaid) return -1;
+
+        const dateA = this.getEffectiveDueDate(a);
+        const dateB = this.getEffectiveDueDate(b);
+
+        if (dateA && dateB) {
+          if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+        }
+
+        if (dateA && !dateB) return -1;
+        if (!dateA && dateB) return 1;
+
+        return (b.current_balance || 0) - (a.current_balance || 0);
+      });
+
+      const totalOriginalDebt = this.debts.reduce((sum, d) => sum + (d.total_amount || 0), 0);
       const totalDebt = this.debts.reduce((sum, d) => sum + (d.current_balance || 0), 0);
+      const totalPaidDown = Math.max(0, totalOriginalDebt - totalDebt);
+      const overallPct = totalOriginalDebt > 0 ? Math.min(100, Math.round((totalPaidDown / totalOriginalDebt) * 100)) : 100;
       const totalMinPayments = this.debts.reduce((sum, d) => sum + (d.minimum_payment || 0), 0);
 
+      // Identify debts arriving/due in next 10 days
+      const debtsDueNext10Days = this.debts.filter(d => {
+        if ((d.current_balance || 0) <= 0) return false;
+        const dueDate = this.getEffectiveDueDate(d);
+        if (!dueDate) return false;
+        const diffDays = this.getDaysDifference(dueDate);
+        return diffDays !== null && diffDays <= 10;
+      });
+
+      const neededNext10Days = debtsDueNext10Days.reduce((sum, d) => {
+        const amt = (d.minimum_payment && d.minimum_payment > 0)
+          ? Math.min(d.minimum_payment, d.current_balance)
+          : d.current_balance;
+        return sum + (amt || 0);
+      }, 0);
+
+      const activeDebtsCount = this.debts.filter(d => (d.current_balance || 0) > 0).length;
+      const personalLoansCount = this.debts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) <= 0).length;
+      const bankLoansCount = this.debts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) > 0).length;
+      const paidLoansCount = this.debts.filter(d => (d.current_balance || 0) <= 0).length;
+
+      // Filter displayed debts according to selected tab
+      let displayedDebts = this.debts;
+      let emptyMessage = "You currently have no borrowed money or loan accounts configured.";
+      if (this.currentFilter === 'due10') {
+        displayedDebts = debtsDueNext10Days;
+        emptyMessage = "No debt payments due in the next 10 days! All obligations are clear.";
+      } else if (this.currentFilter === 'personal') {
+        displayedDebts = this.debts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) <= 0);
+        emptyMessage = "No active personal (0% interest) loans configured.";
+      } else if (this.currentFilter === 'bank') {
+        displayedDebts = this.debts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) > 0);
+        emptyMessage = "No active bank or interest-bearing loans configured.";
+      } else if (this.currentFilter === 'paid') {
+        displayedDebts = this.debts.filter(d => (d.current_balance || 0) <= 0);
+        emptyMessage = "No paid-off debt accounts yet. Keep up the payoff momentum!";
+      }
+
       container.innerHTML = `
+        <!-- Header -->
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; flex-wrap:wrap; gap:1rem;">
           <div>
-            <h2 style="font-size:1.25rem; font-weight:700;">Debt Tracker & Borrowed Money</h2>
-            <p style="color:var(--text-muted); font-size:0.88rem;">Track personal borrowed money, loans, installment payments, and payoff history</p>
+            <h2 style="font-size:1.35rem; font-weight:800; letter-spacing:-0.02em;">Debt Tracker & Cash Requirements</h2>
+            <p style="color:var(--text-muted); font-size:0.88rem;">Monitor total borrowed balances, short-term cash needs, and installment payoff schedules</p>
           </div>
 
           <button class="btn btn-primary" id="add-debt-btn">
@@ -35,36 +129,185 @@ const DebtTrackerPage = {
           </button>
         </div>
 
-        <div class="grid-cols-4" style="margin-bottom:1.5rem;">
-          <div class="card stat-card">
-            <div class="stat-header">
-              <span>Total Remaining Debt</span>
-              <div class="stat-icon danger"><i data-lucide="credit-card"></i></div>
-            </div>
-            <div class="stat-value" style="color:var(--color-danger);">${formatCurrency(totalDebt)}</div>
-            <div class="stat-sub">Across ${this.debts.length} active debt accounts</div>
-          </div>
+        <!-- 1. Hero Overview Summary Banner -->
+        <div class="card" style="margin-bottom:1.5rem; padding:1.5rem; background:linear-gradient(135deg, var(--bg-card) 0%, var(--bg-tertiary, #f8f9fd) 100%); border:1px solid var(--border-color); border-radius:var(--radius-lg); box-shadow:var(--shadow-md);">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:1.5rem; align-items:stretch;">
+            
+            <!-- Left: Global Debt Balance & Repayment Progress -->
+            <div style="display:flex; flex-direction:column; justify-content:space-between; gap:1.25rem;">
+              <div>
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
+                  <div style="width:30px; height:30px; border-radius:var(--radius-md); background:rgba(239, 68, 68, 0.15); color:var(--color-danger); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="credit-card" style="width:16px; height:16px;"></i>
+                  </div>
+                  <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Total Remaining Debt</span>
+                </div>
+                <div style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+                  <h1 style="font-size:2.1rem; font-weight:800; color:var(--color-danger); line-height:1; margin:0;">${formatCurrency(totalDebt)}</h1>
+                  <span style="font-size:0.85rem; color:var(--text-muted);">of ${formatCurrency(totalOriginalDebt)} original</span>
+                </div>
+              </div>
 
-          <div class="card stat-card">
-            <div class="stat-header">
-              <span>Monthly Minimum Payments</span>
-              <div class="stat-icon warning"><i data-lucide="calendar"></i></div>
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:0.82rem; font-weight:600; margin-bottom:0.4rem;">
+                  <span>Overall Repayment Progress</span>
+                  <span style="color:var(--color-success); font-weight:700;">${overallPct}% Repaid (${formatCurrency(totalPaidDown)})</span>
+                </div>
+                <div class="progress-bar-bg" style="height:9px;">
+                  <div class="progress-bar-fill" style="width:${overallPct}%; background-color:var(--color-success);"></div>
+                </div>
+              </div>
+
+              <div style="display:flex; gap:1.5rem; flex-wrap:wrap; font-size:0.84rem; color:var(--text-secondary); padding-top:0.75rem; border-top:1px solid var(--border-color);">
+                <div>
+                  <span style="color:var(--text-muted);">Active Accounts:</span> <strong>${activeDebtsCount}</strong>
+                </div>
+                <div>
+                  <span style="color:var(--text-muted);">Monthly Obligation:</span> <strong style="color:var(--color-warning);">${formatCurrency(totalMinPayments)}/mo</strong>
+                </div>
+              </div>
             </div>
-            <div class="stat-value" style="color:var(--color-warning);">${formatCurrency(totalMinPayments)}</div>
-            <div class="stat-sub">Estimated monthly installment obligation</div>
+
+            <!-- Right: Short-term Cash Needed (Next 10 Days) Highlight Box -->
+            <div style="background:var(--bg-card); border:1.5px solid ${neededNext10Days > 0 ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-color)'}; border-radius:var(--radius-md); padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <span style="font-size:0.8rem; font-weight:700; color:${neededNext10Days > 0 ? 'var(--color-warning)' : 'var(--color-success)'}; text-transform:uppercase; letter-spacing:0.04em; display:flex; align-items:center; gap:0.4rem;">
+                    <i data-lucide="${neededNext10Days > 0 ? 'clock' : 'check-circle-2'}" style="width:15px; height:15px;"></i>
+                    Cash Needed for Next 10 Days
+                  </span>
+                  <div style="font-size:1.9rem; font-weight:800; color:${neededNext10Days > 0 ? 'var(--color-warning)' : 'var(--color-success)'}; margin-top:0.35rem; line-height:1.1;">
+                    ${formatCurrency(neededNext10Days)}
+                  </div>
+                </div>
+                <div style="width:40px; height:40px; border-radius:var(--radius-full); background:${neededNext10Days > 0 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)'}; color:${neededNext10Days > 0 ? 'var(--color-warning)' : 'var(--color-success)'}; display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="${neededNext10Days > 0 ? 'alert-triangle' : 'check'}" style="width:20px; height:20px;"></i>
+                </div>
+              </div>
+
+              <div style="font-size:0.84rem; color:var(--text-muted); line-height:1.45;">
+                ${debtsDueNext10Days.length > 0 
+                  ? `<strong>${debtsDueNext10Days.length} installment(s)</strong> require payment in the next 10 days.`
+                  : `No upcoming debt payments required within the next 10 days.`}
+              </div>
+
+              ${debtsDueNext10Days.length > 0 ? `
+                <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-tertiary, #f8f9fd); padding:0.5rem 0.75rem; border-radius:var(--radius-sm); font-size:0.8rem; border:1px solid var(--border-color);">
+                  <span style="font-weight:600; color:var(--text-secondary);">Earliest Due Date:</span>
+                  <span style="font-weight:700; color:var(--color-danger);">${this.getEffectiveDueDate(debtsDueNext10Days[0])}</span>
+                </div>
+              ` : `
+                <div style="font-size:0.8rem; color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:0.35rem;">
+                  <i data-lucide="shield-check" style="width:14px; height:14px;"></i> All installment schedules are up to date!
+                </div>
+              `}
+            </div>
+
           </div>
         </div>
 
+        <!-- 2. Dedicated 10-Day Urgent Action Strip (if any due soon) -->
+        ${debtsDueNext10Days.length > 0 ? `
+          <div class="card" style="margin-bottom:1.5rem; padding:1.15rem 1.35rem; border:1px solid rgba(245, 158, 11, 0.35); background:rgba(245, 158, 11, 0.04); border-radius:var(--radius-md);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.85rem; flex-wrap:wrap; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div style="width:28px; height:28px; border-radius:var(--radius-md); background:var(--color-warning); color:#fff; display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="zap" style="width:16px; height:16px;"></i>
+                </div>
+                <div>
+                  <h3 style="font-size:0.95rem; font-weight:700; color:var(--text-primary);">Due in the Next 10 Days (${debtsDueNext10Days.length})</h3>
+                  <span style="font-size:0.75rem; color:var(--text-muted);">Quick-pay installments due soon to avoid late fees or delays</span>
+                </div>
+              </div>
+              <span style="font-size:0.8rem; font-weight:700; color:var(--color-warning); background:var(--bg-card); padding:0.25rem 0.65rem; border-radius:var(--radius-full); border:1px solid rgba(245, 158, 11, 0.3);">
+                Total: ${formatCurrency(neededNext10Days)}
+              </span>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:0.75rem;">
+              ${debtsDueNext10Days.map(d => {
+                const dueDate = this.getEffectiveDueDate(d);
+                const diffDays = this.getDaysDifference(dueDate);
+                const defaultAmount = (d.minimum_payment && d.minimum_payment > 0) ? Math.min(d.minimum_payment, d.current_balance) : d.current_balance;
+
+                let badgeBg = 'rgba(245, 158, 11, 0.15)';
+                let badgeColor = 'var(--color-warning)';
+                let badgeText = `Due in ${diffDays}d`;
+                if (diffDays < 0) {
+                  badgeBg = 'rgba(239, 68, 68, 0.15)';
+                  badgeColor = 'var(--color-danger)';
+                  badgeText = `${Math.abs(diffDays)}d overdue`;
+                } else if (diffDays === 0) {
+                  badgeBg = 'rgba(239, 68, 68, 0.15)';
+                  badgeColor = 'var(--color-danger)';
+                  badgeText = 'Due Today';
+                }
+
+                return `
+                  <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-card); padding:0.65rem 0.85rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); gap:0.5rem;">
+                    <div style="min-width:0;">
+                      <div style="font-weight:700; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        ${d.name}
+                      </div>
+                      <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.75rem; margin-top:0.15rem;">
+                        <span style="padding:0.1rem 0.4rem; border-radius:var(--radius-sm); background:${badgeBg}; color:${badgeColor}; font-weight:700;">
+                          ${badgeText}
+                        </span>
+                        <span style="color:var(--text-muted);">${dueDate}</span>
+                      </div>
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                      <div style="font-weight:800; color:var(--color-danger); font-size:0.9rem; white-space:nowrap;">
+                        ${formatCurrency(defaultAmount)}
+                      </div>
+                      <button class="btn btn-primary btn-sm make-payment-btn" data-id="${d.id}" style="padding:0.25rem 0.6rem; font-size:0.75rem; white-space:nowrap;">
+                        Pay
+                      </button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- 3. Quick Filter Tabs Navigation -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:0.75rem;">
+          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;" id="debt-filter-tabs">
+            <button class="btn ${this.currentFilter === 'all' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="all" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              All Debts (${this.debts.length})
+            </button>
+            <button class="btn ${this.currentFilter === 'due10' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="due10" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="clock" style="width:13px; height:13px;"></i> Due in 10 Days (${debtsDueNext10Days.length})
+            </button>
+            <button class="btn ${this.currentFilter === 'personal' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="personal" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="hand-coins" style="width:13px; height:13px;"></i> Personal Loans (${personalLoansCount})
+            </button>
+            <button class="btn ${this.currentFilter === 'bank' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="bank" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="landmark" style="width:13px; height:13px;"></i> Bank Loans (${bankLoansCount})
+            </button>
+            <button class="btn ${this.currentFilter === 'paid' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="paid" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="check" style="width:13px; height:13px;"></i> Paid Off (${paidLoansCount})
+            </button>
+          </div>
+
+          <span style="font-size:0.8rem; color:var(--text-muted);">
+            Showing <strong>${displayedDebts.length}</strong> of ${this.debts.length} records
+          </span>
+        </div>
+
+        <!-- 4. Debts Cards Grid (Sorted by arrival date) -->
         <div class="grid-cols-2">
-          ${this.debts.length === 0 ? `
+          ${displayedDebts.length === 0 ? `
             <div class="card" style="grid-column:1/-1; color:var(--text-muted); text-align:center; padding:3rem 1.5rem;">
-              <div style="width:48px; height:48px; border-radius:var(--radius-full); background:var(--bg-tertiary); display:inline-flex; align-items:center; justify-content:center; margin-bottom:0.75rem;">
+              <div style="width:48px; height:48px; border-radius:var(--radius-full); background:var(--bg-tertiary, #f8f9fd); display:inline-flex; align-items:center; justify-content:center; margin-bottom:0.75rem;">
                 <i data-lucide="check-circle-2" style="width:24px; height:24px; color:var(--color-success);"></i>
               </div>
-              <div style="font-weight:700; font-size:1.05rem; color:var(--text-primary);">No Debt Records</div>
-              <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.25rem;">You currently have no borrowed money or loan accounts configured.</p>
+              <div style="font-weight:700; font-size:1.05rem; color:var(--text-primary);">${emptyMessage}</div>
+              <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.25rem;">Use the filter tabs above or click "+ Add Debt" to add new records.</p>
             </div>
-          ` : this.debts.map(d => {
+          ` : displayedDebts.map(d => {
             const paidDown = Math.max(0, (d.total_amount || 0) - (d.current_balance || 0));
             const pct = d.total_amount > 0 ? Math.min(100, Math.round((paidDown / d.total_amount) * 100)) : 0;
             const payments = d.payments || [];
@@ -113,6 +356,44 @@ const DebtTrackerPage = {
                     <span>${pct}% paid off (${formatCurrency(paidDown)})</span>
                     <span>${d.minimum_payment > 0 ? `Target installment: ${formatCurrency(d.minimum_payment)}/mo` : 'No fixed installment'}</span>
                   </div>
+
+                  ${!isFullyPaid ? (() => {
+                    const effectiveDate = this.getEffectiveDueDate(d);
+                    if (effectiveDate) {
+                      const diffDays = this.getDaysDifference(effectiveDate);
+
+                      let badgeColor = 'var(--text-muted)';
+                      let dateText = effectiveDate;
+                      if (diffDays < 0) {
+                        badgeColor = 'var(--color-danger)';
+                        dateText = `${effectiveDate} (${Math.abs(diffDays)}d overdue)`;
+                      } else if (diffDays === 0) {
+                        badgeColor = 'var(--color-danger)';
+                        dateText = `${effectiveDate} (Due Today)`;
+                      } else if (diffDays <= 3) {
+                        badgeColor = 'var(--color-warning)';
+                        dateText = `${effectiveDate} (Due in ${diffDays}d)`;
+                      } else if (diffDays <= 10) {
+                        badgeColor = 'var(--color-warning)';
+                        dateText = `${effectiveDate} (Due in ${diffDays}d)`;
+                      } else {
+                        dateText = `${effectiveDate} (In ${diffDays}d)`;
+                      }
+
+                      return `
+                        <div style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; font-weight:600; color:${badgeColor}; margin-top:0.4rem;">
+                          <i data-lucide="calendar-clock" style="width:14px; height:14px;"></i>
+                          <span>Next Payment Date: <strong>${dateText}</strong></span>
+                        </div>
+                      `;
+                    }
+                    return `
+                      <div style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:var(--text-muted); margin-top:0.4rem;">
+                        <i data-lucide="calendar-clock" style="width:14px; height:14px;"></i>
+                        <span>Next Payment Date: No scheduled date</span>
+                      </div>
+                    `;
+                  })() : ''}
                 </div>
 
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border-color);">
@@ -174,6 +455,13 @@ const DebtTrackerPage = {
     document.getElementById('add-debt-btn')?.addEventListener('click', () => this.openDebtModal());
 
     container.addEventListener('click', async (e) => {
+      const filterBtn = e.target.closest('.filter-tab-btn');
+      if (filterBtn) {
+        this.currentFilter = filterBtn.getAttribute('data-filter');
+        this.render(container);
+        return;
+      }
+
       const paymentBtn = e.target.closest('.make-payment-btn');
       if (paymentBtn && !paymentBtn.disabled) {
         const id = parseInt(paymentBtn.getAttribute('data-id'), 10);
@@ -265,9 +553,15 @@ const DebtTrackerPage = {
             <input type="number" min="1" max="31" id="modal-debt-day" class="form-control" value="${debt ? debt.due_day : 1}">
           </div>
           <div class="form-group">
-            <label>Color Theme</label>
-            <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : '#EF4444'}" style="height:42px; padding:0.2rem;">
+            <label>Next Payment Date</label>
+            <input type="date" id="modal-debt-next-date" class="form-control" value="${debt && debt.next_payment_date ? debt.next_payment_date : ''}">
+            <small style="color:var(--text-muted); font-size:0.75rem;">Date of monthly payment</small>
           </div>
+        </div>
+
+        <div class="form-group">
+          <label>Color Theme</label>
+          <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : '#EF4444'}" style="height:42px; padding:0.2rem;">
         </div>
       </form>
     `;
@@ -283,6 +577,7 @@ const DebtTrackerPage = {
         const interest_rate = parseFloat(document.getElementById('modal-debt-rate').value || 0);
         const minimum_payment = parseFloat(document.getElementById('modal-debt-min').value || 0);
         const due_day = parseInt(document.getElementById('modal-debt-day').value || 1, 10);
+        const next_payment_date = document.getElementById('modal-debt-next-date').value || null;
         const color = document.getElementById('modal-debt-color').value;
 
         if (!name || total_amount <= 0) {
@@ -291,10 +586,10 @@ const DebtTrackerPage = {
         }
 
         if (isEdit) {
-          await API.put(`/api/debts/${debt.id}`, { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color });
+          await API.put(`/api/debts/${debt.id}`, { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color });
           Toast.show('Debt record updated!', 'success');
         } else {
-          await API.post('/api/debts', { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color });
+          await API.post('/api/debts', { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color });
           Toast.show('Debt record created!', 'success');
         }
 
@@ -309,18 +604,26 @@ const DebtTrackerPage = {
         const nameEl = document.getElementById('modal-debt-name');
         const rateEl = document.getElementById('modal-debt-rate');
         const colorEl = document.getElementById('modal-debt-color');
+        const dateEl = document.getElementById('modal-debt-next-date');
         if (nameEl && !nameEl.value) nameEl.placeholder = 'e.g. Borrowed from Alex';
         if (rateEl) rateEl.value = '0';
         if (colorEl) colorEl.value = '#3B82F6';
+        if (dateEl) dateEl.value = '';
       });
 
       document.getElementById('preset-bank-loan')?.addEventListener('click', () => {
         const nameEl = document.getElementById('modal-debt-name');
         const rateEl = document.getElementById('modal-debt-rate');
         const colorEl = document.getElementById('modal-debt-color');
+        const dateEl = document.getElementById('modal-debt-next-date');
         if (nameEl && !nameEl.value) nameEl.placeholder = 'e.g. Bank Personal Loan';
         if (rateEl && rateEl.value === '0') rateEl.value = '7.5';
         if (colorEl) colorEl.value = '#EF4444';
+        if (dateEl && !dateEl.value) {
+          const now = new Date();
+          const target = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+          dateEl.value = target.toISOString().split('T')[0];
+        }
       });
 
       const totalInput = document.getElementById('modal-debt-total');
@@ -370,9 +673,21 @@ const DebtTrackerPage = {
           </div>
         </div>
 
-        <div class="form-group">
-          <label>Payment Memo / Note</label>
-          <input type="text" id="pay-note" class="form-control" placeholder="e.g. Installment 1 of 4, Cash repayment" value="Installment payment">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Budget Expense Category</label>
+            <select id="pay-category" class="form-control">
+              ${this.categories.map(c => {
+                const isDebtCat = c.name.toLowerCase().includes('debt') || c.name.toLowerCase().includes('loan');
+                return `<option value="${c.id}" ${isDebtCat ? 'selected' : ''}>${c.name}</option>`;
+              }).join('')}
+            </select>
+            <small style="color:var(--text-muted); font-size:0.75rem;">Impacts monthly category budget & notifications</small>
+          </div>
+          <div class="form-group">
+            <label>Payment Memo / Note</label>
+            <input type="text" id="pay-note" class="form-control" placeholder="e.g. Installment 1 of 4, Cash repayment" value="Installment payment">
+          </div>
         </div>
       </form>
     `;
@@ -384,6 +699,7 @@ const DebtTrackerPage = {
       onSave: async () => {
         const amount = parseFloat(document.getElementById('pay-amount').value || 0);
         const account_id = document.getElementById('pay-account').value;
+        const category_id = document.getElementById('pay-category')?.value;
         const date = document.getElementById('pay-date').value;
         const note = document.getElementById('pay-note').value;
 
@@ -398,8 +714,13 @@ const DebtTrackerPage = {
           }
         }
 
-        await API.post(`/api/debts/${debt.id}/payment`, { amount, account_id, date, note });
-        Toast.show(`Payment of €${amount.toFixed(2)} recorded on ${date}!`, 'success');
+        const res = await API.post(`/api/debts/${debt.id}/payment`, { amount, account_id, category_id, date, note });
+        const nextDateMsg = res && res.next_payment_date ? ` Next payment due: ${res.next_payment_date}` : '';
+        Toast.show(`Payment of €${amount.toFixed(2)} recorded!${nextDateMsg}`, 'success');
+
+        if (window.updateNotificationBadges) {
+          window.updateNotificationBadges();
+        }
 
         this.expandedHistories[debt.id] = true;
         const container = document.getElementById('page-content');

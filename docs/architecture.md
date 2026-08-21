@@ -1,4 +1,4 @@
-﻿# Personal Finance Dashboard — Architecture Reference
+# Personal Finance Dashboard — Architecture Reference
 
 > **Purpose**: Single source of truth for making changes without re-reading source files.
 > Last updated: 2026-08-18 (Comprehensive documentation suite created)
@@ -160,14 +160,13 @@ Auto-renders via \lucide.createIcons()\ after page render. Call manually after d
 
 | Table | Key Columns | Notes |
 |---|---|---|
-| \ccounts\ | id, name, type, balance, color | checking/savings/credit/cash/investment |
+| \accounts\ | id, name, type, balance, color | checking/savings/credit/cash/investment |
 | \categories\ | id, name, type, expense_type, icon, color, budget_limit, rollover | fixed/variable/discretionary |
-| \	ransactions\ | id, account_id, category_id, amount, type, date, note, target_account_id | income/expense/transfer |
-| \ecurring\ | id, name, account_id, category_id, amount, type, frequency, next_due, active | daily/weekly/bi-weekly/monthly/yearly |
+| \transactions\ | id, account_id, category_id, amount, type, date, note, target_account_id | income/expense/transfer |
+| \recurring\ | id, name, account_id, category_id, amount, type, frequency, next_due, active | daily/weekly/bi-weekly/monthly/yearly |
 | \goals\ | id, name, target_amount, current_amount, deadline, color | |
-| \
-otifications\ | id, type, title, message, read | alert/info/milestone/bill |
-| \debts\ | id, name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color | |
+| \notifications\ | id, type, title, message, read | alert/info/milestone/bill |
+| \debts\ | id, name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color | \next_payment_date\ scoped to bank/installment loans (\interest_rate > 0\ or \minimum_payment > 0\). NULL for 0% personal borrowed money. |
 | \debt_payments\ | id, debt_id, amount, date, account_id, note | FK cascade on debt delete |
 | \deadlines\ | id, title, description, due_date, category, amount, status, priority | pending/completed/overdue |
 
@@ -189,12 +188,12 @@ otifications\ | id, type, title, message, read | alert/info/milestone/bill |
 |---|---|---|---|---|---|
 | \/api/accounts\ | List all | Create | Update :id | Delete :id | \POST /transfer\ |
 | \/api/categories\ | List all | Create | Update :id | Delete :id | |
-| \/api/transactions\ | List (filterable) | Create | - | Delete :id | \GET /export\ (CSV) |
+| \/api/transactions\ | List (filterable) | Create | - | Delete :id | \GET /export\ (CSV), \POST /import\ (CSV/Bulk) |
 | \/api/recurring\ | List (with JOINs) | Create | Update :id | Delete :id | |
 | \/api/goals\ | List all | Create | Update :id (or contribute) | Delete :id | |
 | \/api/deadlines\ | List (auto-overdue) | Create | Update :id | Delete :id | \PUT :id/complete\ |
-| \/api/debts\ | List (with payments) | Create | Update :id | Delete :id | \POST :id/payment\ |
-| \/api/notifications\ | List (limit 50) | - | Mark :id read | - | \POST /read-all\ |
+| \/api/debts\ | List (with payments) | Create | Update :id | Delete :id | \POST :id/payment\ (auto-advances next_payment_date for loans) |
+| \/api/notifications\ | List (limit 50) | - | Mark :id read | - | \POST /read-all\ (triggers \checkDebtPaymentAlerts\) |
 
 ---
 
@@ -202,30 +201,40 @@ otifications\ | id, type, title, message, read | alert/info/milestone/bill |
 
 | Source Data | Displayed In | Interaction |
 |---|---|---|
-| \ecurring\ (active bills) | **Dashboard** (Upcoming Bills panel) | Due date badges, link to \#recurring\ |
-| \ecurring\ (active bills) | **Deadlines** (Auto-Detected) | Pin button + link to \#recurring\ |
-| \ecurring\ (next 7 days) | **Recurring** (Due Soon Banner) | Count + total, link to \#deadlines\ |
-| \debts\ (installments) | **Deadlines** (Auto-Detected) | Monthly projection + Pin + link to \#debts\ |
-| \deadlines\ (pending) | **Dashboard** (Deadlines panel) | Priority badges, link to \#deadlines\ |
-| \goals\ (progress) | **Dashboard** (Goals widget) | Progress bars, link to \#goals\ |
-| \debts\ (total balance) | **Dashboard** (Debt stat card) | Total amount, link to \#debts\ |
+| `recurring` (active bills) | **Dashboard** (Upcoming Bills panel) | Due date badges, link to `#recurring` |
+| `recurring` (active bills) | **Deadlines** (Auto-Detected) | Pin button + link to `#recurring` |
+| `recurring` (next 7 days) | **Recurring** (Due Soon Banner) | Count + total, link to `#deadlines` |
+| `debts` (loans with `next_payment_date`) | **Deadlines** (Auto-Detected) | Scheduled installment due date + Pin + link to `#debts` |
+| `debts` (loans upcoming/overdue) | **Notifications** | Auto-generates bill/alert notifications (3d before, due today, overdue) |
+| `debts` (installment payment) | **Transactions Ledger** | Creates expense transaction in `transactions` with note `"Debt Payment: {name}"` |
+| `debts` (installment payment) | **Accounts** | Deducts payment amount from `accounts.balance` |
+| `debts` (installment payment) | **Budget & Categories** | Increases category spending, triggers `checkBudgetAlert` threshold warnings (80%/100%) |
+| `debts` (installment payment) | **Notifications Badges** | Invokes `window.updateNotificationBadges()` to update real-time topbar/sidebar counters |
+| `deadlines` (pending) | **Dashboard** (Deadlines panel) | Priority badges, link to `#deadlines` |
+| `goals` (progress) | **Dashboard** (Goals widget) | Progress bars, link to `#goals` |
+| `debts` (total balance) | **Dashboard** (Debt stat card) | Total amount, link to `#debts` |
 
 ---
 
 ## Backend Sync Rule
-> **CRITICAL**: Both \server/index.js\ (Node) and \server/api_handler.py\ (Python) MUST be kept in sync.
-> Any new endpoint or schema change must be added to both files and both \db.js\ / \db.py\.
+> **CRITICAL**: Both `server/index.js` (Node) and `server/api_handler.py` (Python) MUST be kept in sync.
+> Any new endpoint or schema change must be added to both files and both `db.js` / `db.py`.
 
 ---
 
 ## Business Rules
 
-### Balance Management
-- Income: \ccount.balance += amount\
-- Expense: \ccount.balance -= amount\
+### Balance & Debt Payment Management
+- Income: `account.balance += amount`
+- Expense: `account.balance -= amount`
 - Transfer: source -= amount, target += amount
 - Delete transaction: reverses the balance change
-- Debt payment with account: creates expense transaction + deducts balance
+- Debt payment with account:
+  1. Decreases debt `current_balance`
+  2. Auto-advances `next_payment_date` by 1 month for loans (sets NULL if balance = 0)
+  3. Inserts expense record into `transactions` with selected category
+  4. Deducts amount from `account.balance`
+  5. Triggers `checkBudgetAlert(category_id)` for budget warnings
 
 ### Budget Alerts
 - On expense: checks category monthly spending

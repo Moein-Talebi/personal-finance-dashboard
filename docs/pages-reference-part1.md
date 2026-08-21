@@ -61,8 +61,10 @@
 - `renderFilterTags()`: Generates active filter chips in `#active-filters-chips` with clear buttons.
 - `filterData()`: Filters `this.transactions` by all active filters, updates `#tx-table-body`.
 - `renderRows(txList)`: Returns `<tr>` HTML for each transaction.
-- `attachEvents(container)`: Binds all filter inputs, add button, delete buttons.
+- `attachEvents(container)`: Binds all filter inputs, add button, import CSV button, delete buttons.
 - `openAddModal()`: Opens add transaction modal.
+- `openImportModal()`: Opens wide modal for drag-and-drop / file upload CSV import with live preview table and default fallback selectors.
+- `parseCSV(text)`: Multi-language RFC-4180 CSV parser supporting Italian, German, French, Spanish, and English headers (e.g. Data/Dettagli/Importo, Datum/Betrag, Date/Amount), auto date normalizer, and smart category suggestions.
 
 ### API Calls
 - `GET /api/transactions` (parallel with accounts + categories)
@@ -70,6 +72,7 @@
 - `GET /api/categories`
 - `DELETE /api/transactions/${id}` (with confirm)
 - `POST /api/transactions` body: `{ type, amount, account_id, category_id, target_account_id, date, note }`
+- `POST /api/transactions/import` body: `{ transactions: [...] }`
 - CSV export: direct link to `GET /api/transactions/export`
 
 ### Add Transaction Modal
@@ -80,8 +83,15 @@
 - Transfer uses `categories[0].id` as fallback category
 - Validation: amount > 0
 
+### Import CSV Modal
+- Title: 'Import Transactions from CSV' (Size: `lg`)
+- Drag-and-drop / file input zone `#csv-dropzone`
+- Payment account selector `#import-default-account`
+- Live preview table `#csv-preview-tbody` showing parsed date, type badge, account, note, and amount (category is auto-assigned based on transaction type)
+- Live validation summary badge showing ready rows and total volume
+
 ### DOM Structure
-- Filter toolbar card: `#tx-search`, `#tx-account-filter`, `#tx-category-filter`, `#tx-type-filter`, `#export-csv-btn`, `#add-tx-btn`
+- Filter toolbar card: `#tx-search`, `#tx-account-filter`, `#tx-category-filter`, `#tx-type-filter`, `#import-csv-btn`, `#export-csv-btn`, `#add-tx-btn`
 - Active filters: `#active-filters-chips` (chip-grid)
 - Ledger table: columns Date, Category, Note/Memo, Account, Status, Amount, Actions
 

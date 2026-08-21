@@ -49,13 +49,16 @@ const DeadlinesPage = {
       const currentMonth = now.getMonth();
 
       this.debts.forEach(d => {
-        if (d.minimum_payment > 0 || d.current_balance > 0) {
-          const dueDay = Math.min(Math.max(parseInt(d.due_day, 10) || 1, 1), 28);
-          let targetDate = new Date(currentYear, currentMonth, dueDay);
-          if (targetDate.toISOString().split('T')[0] < todayStr) {
-            targetDate = new Date(currentYear, currentMonth + 1, dueDay);
+        if (d.current_balance > 0) {
+          let debtDueStr = d.next_payment_date;
+          if (!debtDueStr) {
+            const dueDay = Math.min(Math.max(parseInt(d.due_day, 10) || 1, 1), 28);
+            let targetDate = new Date(currentYear, currentMonth, dueDay);
+            if (targetDate.toISOString().split('T')[0] < todayStr) {
+              targetDate = new Date(currentYear, currentMonth + 1, dueDay);
+            }
+            debtDueStr = targetDate.toISOString().split('T')[0];
           }
-          const debtDueStr = targetDate.toISOString().split('T')[0];
 
           autoDetected.push({
             type: 'debt',

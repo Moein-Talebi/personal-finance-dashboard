@@ -1,4 +1,4 @@
-﻿# Personal Finance Dashboard
+# Personal Finance Dashboard
 
 A comprehensive, modular personal finance web application built for complete financial visibility and control. Track income, expenses, category budgets, multi-wallet accounts, savings goals, financial deadlines, debts with installment history, recurring subscriptions, and 50/30/20 budget ratios.
 
@@ -18,7 +18,8 @@ A comprehensive, modular personal finance web application built for complete fin
 
 ### 3. Debt Tracker & Installment Log
 - **Borrowed Money & Bank Loans**: Quick setup presets for 0% personal loans from friends and interest-bearing bank loans.
-- **Partial Payoff History**: Log individual installment payments with source account linking, note memos, and expandable payment logs.
+- **Monthly Payment Dates & Auto-Advance**: Scoped next payment date tracking and auto-advancing 1-month schedules for bank/installment loans, with upcoming and overdue alert notifications.
+- **Partial Payoff History & Account Deductions**: Log individual installment payments with automatic source bank account balance deductions, transaction ledger records, and expandable payment logs.
 - **Visual Payoff Progress**: Real-time progress bars showing total paid down vs remaining balance.
 
 ### 4. Recurring Bills & Subscriptions
@@ -38,7 +39,7 @@ A comprehensive, modular personal finance web application built for complete fin
 
 ### 7. Interactive Analytics & Ledger
 - **Spending Trends**: 6-month historical income vs expense comparison and top category spending ledger.
-- **Full Transaction Ledger**: Search, filter by account/category/type, active filter tags, and CSV export.
+- **Full Transaction Ledger**: Search, filter by account/category/type, active filter tags, CSV export, and intelligent multi-language CSV upload & import with live preview.
 
 ---
 

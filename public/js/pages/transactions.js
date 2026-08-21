@@ -63,6 +63,9 @@ const TransactionsPage = {
           </div>
 
           <div style="display:flex; gap:0.85rem; align-items:center;">
+            <button class="btn btn-outline" id="import-csv-btn">
+              <i data-lucide="upload"></i> <span>Import CSV</span>
+            </button>
             <a href="/api/transactions/export" download="transactions.csv" class="btn btn-outline" id="export-csv-btn">
               <i data-lucide="download"></i> <span>Export CSV</span>
             </a>
@@ -270,6 +273,11 @@ const TransactionsPage = {
       });
     }
 
+    const importBtn = document.getElementById('import-csv-btn');
+    if (importBtn) {
+      importBtn.addEventListener('click', () => this.openImportModal());
+    }
+
     document.getElementById('add-tx-btn').addEventListener('click', () => this.openAddModal());
 
     container.addEventListener('click', async (e) => {
@@ -398,6 +406,480 @@ const TransactionsPage = {
           targetGroup.classList.add('hidden');
         }
       });
+    });
+  },
+
+  openImportModal() {
+    let parsedRows = [];
+
+    const contentHTML = `
+      <div>
+        <!-- File Dropzone -->
+        <div class="file-dropzone" id="csv-dropzone">
+          <i data-lucide="upload-cloud" style="width:36px; height:36px; color:var(--color-primary);"></i>
+          <div style="font-weight:700; font-size:1.05rem;">Choose CSV File or Drag & Drop</div>
+          <div style="font-size:0.82rem; color:var(--text-secondary);">Supports exported ledger CSVs or standard bank transaction exports</div>
+          <input type="file" id="csv-file-input" accept=".csv,text/csv" style="display:none;">
+          <button type="button" class="btn btn-outline" style="margin-top:0.5rem;" id="browse-csv-btn">
+            <i data-lucide="file-text"></i> <span>Select CSV File</span>
+          </button>
+        </div>
+
+        <!-- Fallback Defaults Form -->
+        <div style="margin-top:1.25rem;">
+          <div class="form-group">
+            <label>Payment Account (if unassigned in CSV)</label>
+            <select id="import-default-account" class="form-control">
+              ${this.accounts.map(a => `<option value="${a.id}">${a.name} (€${a.balance.toFixed(2)})</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <!-- CSV Preview Container -->
+        <div id="csv-preview-section" style="display:none; margin-top:1.25rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <i data-lucide="file-check" style="width:18px; height:18px; color:var(--color-success);"></i>
+              <span id="csv-file-name" style="font-weight:700; font-size:0.95rem;">file.csv</span>
+            </div>
+            <div id="csv-stats-badge" style="font-size:0.85rem; font-weight:700; color:var(--color-primary);"></div>
+          </div>
+
+          <div class="csv-preview-container">
+            <table class="csv-preview-table">
+              <thead>
+                <tr>
+                  <th style="width:40px;">#</th>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Account</th>
+                  <th>Note / Memo</th>
+                  <th style="text-align:right;">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="csv-preview-tbody">
+                <!-- Injected after parsing -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    Modal.open({
+      title: 'Import Transactions from CSV',
+      size: 'lg',
+      saveText: 'Import Transactions',
+      contentHTML,
+      onSave: async () => {
+        if (!parsedRows || parsedRows.length === 0) {
+          Toast.show('Please upload a CSV file containing transaction records', 'warning');
+          return false;
+        }
+
+        const validRows = parsedRows.filter(r => r.isValid);
+        if (validRows.length === 0) {
+          Toast.show('No valid transaction rows found in the uploaded file', 'warning');
+          return false;
+        }
+
+        const defaultAccountId = parseInt(document.getElementById('import-default-account').value);
+        const defaultIncomeCat = this.categories.find(c => c.type === 'income') || this.categories[0];
+        const defaultExpenseCat = this.categories.find(c => c.type === 'expense') || this.categories[0];
+
+        const payload = validRows.map(r => {
+          let accId = defaultAccountId;
+          if (r.account_name) {
+            const foundAcc = this.accounts.find(a => a.name.toLowerCase() === r.account_name.toLowerCase() || a.name.toLowerCase().includes(r.account_name.toLowerCase()));
+            if (foundAcc) accId = foundAcc.id;
+          }
+
+          let catId = r.type === 'income' ? defaultIncomeCat.id : defaultExpenseCat.id;
+          if (r.category_name) {
+            const foundCat = this.categories.find(c => c.name.toLowerCase() === r.category_name.toLowerCase() || c.name.toLowerCase().includes(r.category_name.toLowerCase()));
+            if (foundCat) catId = foundCat.id;
+          }
+
+          return {
+            date: r.date,
+            type: r.type,
+            amount: r.amount,
+            account_id: accId,
+            account_name: r.account_name || undefined,
+            category_id: catId,
+            note: r.note || ''
+          };
+        });
+
+        try {
+          const res = await API.post('/api/transactions/import', { transactions: payload });
+          Toast.show(res.message || `Successfully imported ${res.count || payload.length} transactions!`, 'success');
+          const container = document.getElementById('page-content');
+          this.render(container);
+          return true;
+        } catch (err) {
+          // If server was started before adding /api/transactions/import and returns 404,
+          // fallback to individual POST /api/transactions requests
+          if (err.message && err.message.includes('404')) {
+            try {
+              let successCount = 0;
+              for (const tx of payload) {
+                await API.post('/api/transactions', {
+                  type: tx.type,
+                  amount: tx.amount,
+                  account_id: tx.account_id,
+                  category_id: tx.category_id,
+                  date: tx.date,
+                  note: tx.note
+                });
+                successCount++;
+              }
+              Toast.show(`Successfully imported ${successCount} transactions!`, 'success');
+              const container = document.getElementById('page-content');
+              this.render(container);
+              return true;
+            } catch (fallbackErr) {
+              Toast.show(`Import failed: ${fallbackErr.message}`, 'danger');
+              return false;
+            }
+          }
+          Toast.show(`Import failed: ${err.message}`, 'danger');
+          return false;
+        }
+      }
+    });
+
+    // Wire Up File Selection & Drag-and-Drop
+    const dropzone = document.getElementById('csv-dropzone');
+    const fileInput = document.getElementById('csv-file-input');
+    const browseBtn = document.getElementById('browse-csv-btn');
+    const previewSection = document.getElementById('csv-preview-section');
+    const fileNameEl = document.getElementById('csv-file-name');
+    const statsBadgeEl = document.getElementById('csv-stats-badge');
+    const previewTbody = document.getElementById('csv-preview-tbody');
+
+    if (browseBtn && fileInput) {
+      browseBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fileInput.click();
+      });
+    }
+
+    if (dropzone && fileInput) {
+      dropzone.addEventListener('click', () => fileInput.click());
+
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragover');
+      });
+
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFile(e.dataTransfer.files[0]);
+        }
+      });
+
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          handleFile(e.target.files[0]);
+        }
+      });
+    }
+
+    const defaultAccountSelect = document.getElementById('import-default-account');
+
+    const renderPreviewTable = () => {
+      if (!parsedRows || parsedRows.length === 0) return;
+
+      const validCount = parsedRows.filter(r => r.isValid).length;
+      const totalAmount = parsedRows.reduce((sum, r) => sum + (r.isValid ? r.amount : 0), 0);
+
+      const selAcctText = defaultAccountSelect?.options[defaultAccountSelect.selectedIndex]?.text.split('(')[0].trim() || 'Default';
+
+      statsBadgeEl.textContent = `${validCount} of ${parsedRows.length} rows ready (Total: ${window.formatCurrency(totalAmount)})`;
+
+      previewTbody.innerHTML = parsedRows.map((r, idx) => {
+        const typeClass = r.type === 'income' ? 'success' : (r.type === 'transfer' ? 'info' : 'danger');
+        const typeSymbol = r.type === 'income' ? '+' : (r.type === 'transfer' ? '' : '-');
+        const displayAcct = r.account_name || `<span style="color:var(--text-secondary); font-style:italic;">${selAcctText}</span>`;
+
+        return `
+          <tr style="${r.isValid ? '' : 'opacity:0.5; background:var(--color-danger-bg);'}">
+            <td style="color:var(--text-muted); font-weight:600;">${idx + 1}</td>
+            <td style="font-weight:600;">${r.date}</td>
+            <td><span class="status-pill ${typeClass}" style="padding:0.15rem 0.5rem; font-size:0.72rem;">${r.type}</span></td>
+            <td>${displayAcct}</td>
+            <td style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.note || ''}">${r.note || '—'}</td>
+            <td style="text-align:right; font-weight:700; color:${r.type === 'income' ? 'var(--color-success)' : 'var(--text-primary)'};">
+              ${typeSymbol}${window.formatCurrency(r.amount)}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      previewSection.style.display = 'block';
+      if (window.lucide) lucide.createIcons();
+    };
+
+    if (defaultAccountSelect) defaultAccountSelect.addEventListener('change', renderPreviewTable);
+
+    const handleFile = (file) => {
+      if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') {
+        Toast.show('Please upload a valid .csv file', 'warning');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const text = evt.target.result;
+        parsedRows = this.parseCSV(text);
+
+        if (!parsedRows || parsedRows.length === 0) {
+          Toast.show('No rows could be read from this CSV file', 'warning');
+          return;
+        }
+
+        fileNameEl.textContent = file.name;
+        renderPreviewTable();
+      };
+      reader.readAsText(file);
+    };
+  },
+
+  parseCSV(text) {
+    const lines = [];
+    let currentRow = [];
+    let currentField = '';
+    let inQuotes = false;
+
+    // Strip UTF-8 BOM and normalize newlines
+    const cleanText = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    for (let i = 0; i < cleanText.length; i++) {
+      const char = cleanText[i];
+      const nextChar = cleanText[i + 1];
+
+      if (inQuotes) {
+        if (char === '"') {
+          if (nextChar === '"') {
+            currentField += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          currentField += char;
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true;
+        } else if (char === ',' || char === ';' || char === '\t') {
+          currentRow.push(currentField.trim());
+          currentField = '';
+        } else if (char === '\n') {
+          currentRow.push(currentField.trim());
+          if (currentRow.some(val => val.length > 0)) {
+            lines.push(currentRow);
+          }
+          currentRow = [];
+          currentField = '';
+        } else {
+          currentField += char;
+        }
+      }
+    }
+
+    if (currentField.length > 0 || currentRow.length > 0) {
+      currentRow.push(currentField.trim());
+      if (currentRow.some(val => val.length > 0)) {
+        lines.push(currentRow);
+      }
+    }
+
+    if (lines.length === 0) return [];
+
+    // Header normalization (lowercase, remove accents, symbols, parentheses)
+    const normalizeStr = (str) => {
+      return String(str || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[\s_\-"'\(\)€$]/g, '');
+    };
+
+    const headers = lines[0].map(h => normalizeStr(h));
+    const rows = lines.slice(1);
+
+    const getColIndex = (names) => {
+      return headers.findIndex(h => names.some(n => h === n || h.includes(n)));
+    };
+
+    // Multi-language keyword dictionaries
+    const dateIdx = getColIndex(['data', 'date', 'datum', 'fecha', 'valuta', 'time', 'day', 'giorno', 'zeit']);
+    const descIdx = getColIndex(['dettagli', 'dettaglio', 'details', 'descrizione', 'description', 'causale', 'note', 'memo', 'verwendungszweck', 'concept', 'payee', 'beneficiario', 'ordinante', 'name', 'text', 'testo']);
+    const refIdx = getColIndex(['riferimento', 'reference', 'ref', 'transazione', 'movimento']);
+    const typeIdx = getColIndex(['tipo', 'type', 'typ', 'segno', 'kind', 'movementtype', 'tipologia']);
+    const amtIdx = getColIndex(['importo', 'amount', 'betrag', 'montant', 'monto', 'valore', 'value', 'sum', 'total', 'totale', 'entrate', 'uscite', 'dare', 'avere', 'price']);
+    const acctIdx = getColIndex(['account', 'konto', 'wallet', 'bank', 'banca', 'carta', 'card', 'conto']);
+    const catIdx = getColIndex(['category', 'kategorie', 'cat', 'categoria', 'rubrica']);
+
+    const normalizeDate = (raw) => {
+      if (!raw) return new Date().toISOString().split('T')[0];
+      const s = String(raw).trim();
+      const dmyMatch = s.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})$/);
+      if (dmyMatch) {
+        return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+      }
+      const ymdMatch = s.match(/^(\d{4})[\/\.\-](\d{1,2})[\/\.\-](\d{1,2})$/);
+      if (ymdMatch) {
+        return `${ymdMatch[1]}-${ymdMatch[2].padStart(2, '0')}-${ymdMatch[3].padStart(2, '0')}`;
+      }
+      return s;
+    };
+
+    // Category smart auto-matcher from description
+    const suggestCategory = (desc, type) => {
+      const lower = (desc || '').toLowerCase();
+      if (!lower) return '';
+
+      // Match against existing categories in dashboard
+      for (const cat of this.categories) {
+        if (lower.includes(cat.name.toLowerCase())) {
+          return cat.name;
+        }
+      }
+
+      // Keyword based suggestions
+      if (/lidl|coop|conad|carrefour|esselunga|aldi|penny|rewe|edeka|supermarket|mensa|food|restaurant|pizzeria|bar|sushi|burger|cafe|bakery|grocer/i.test(lower)) {
+        const found = this.categories.find(c => /food|grocer|dine|dining|essen|aliment/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/iliad|tim|vodafone|wind|enel|a2a|hera|bolletta|internet|wi-fi|wifi|telecom|phone|electric|strom|gas|utility|utilities/i.test(lower)) {
+        const found = this.categories.find(c => /util|bill|bollett|strom/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/klarna|amazon|zalando|ebay|paypal|store|shop|boutique|shein|asos|acquisto/i.test(lower)) {
+        const found = this.categories.find(c => /shop|einkauf/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/uber|taxi|trenitalia|italo|bus|metro|atm|flixbus|benzina|eni|q8|ip|esso|fuel|tanken|parking|autostrada|pedaggio|ticket/i.test(lower)) {
+        const found = this.categories.find(c => /transport|auto|verkehr/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/netflix|spotify|cinema|prime|disney|steam|playstation|apple|nintendo|game|movie|theatre/i.test(lower)) {
+        const found = this.categories.find(c => /entertain|unterhalt/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/farmacia|pharmacy|apotheke|doctor|medico|arzt|dentist|hospital|health|sanit/i.test(lower)) {
+        const found = this.categories.find(c => /health|gesundheit|medic/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/affitto|rent|miete|mutuo|mortgage|condominio|housing|house|wohnung/i.test(lower)) {
+        const found = this.categories.find(c => /hous|rent|wohnen/i.test(c.name));
+        if (found) return found.name;
+      }
+      if (/ricarica|stipendio|salary|gehalt|payroll|bonifico da|rimborso|refund|erstattung/i.test(lower)) {
+        const found = this.categories.find(c => /salary|income|gehalt|freelance/i.test(c.name));
+        if (found) return found.name;
+      }
+
+      return '';
+    };
+
+    // Account smart auto-matcher
+    const suggestAccount = (desc) => {
+      const lower = (desc || '').toLowerCase();
+      if (!lower) return '';
+      for (const acct of this.accounts) {
+        if (lower.includes(acct.name.toLowerCase())) {
+          return acct.name;
+        }
+      }
+      if (/visa|mastercard|carta|credit/i.test(lower)) {
+        const found = this.accounts.find(a => /card|credit|visa|master/i.test(a.name) || a.type === 'credit');
+        if (found) return found.name;
+      }
+      if (/cash|contanti|bargeld/i.test(lower)) {
+        const found = this.accounts.find(a => /cash|contant|bar/i.test(a.name) || a.type === 'cash');
+        if (found) return found.name;
+      }
+      if (/savings|risparmio|sparbuch/i.test(lower)) {
+        const found = this.accounts.find(a => /saving|risparm|spar/i.test(a.name) || a.type === 'savings');
+        if (found) return found.name;
+      }
+      return '';
+    };
+
+    return rows.map((row, index) => {
+      const dateVal = normalizeDate(dateIdx !== -1 ? row[dateIdx] : '');
+
+      let rawAmt = amtIdx !== -1 ? row[amtIdx] : '0';
+      rawAmt = String(rawAmt).replace(/[€$£\s]/g, '');
+      const isNegative = rawAmt.includes('-') || (rawAmt.startsWith('(') && rawAmt.endsWith(')'));
+      rawAmt = rawAmt.replace(/[\(\)\-]/g, '');
+
+      // Normalize decimal separator
+      if (rawAmt.includes(',') && !rawAmt.includes('.')) {
+        rawAmt = rawAmt.replace(',', '.');
+      } else if (rawAmt.includes('.') && rawAmt.includes(',')) {
+        rawAmt = rawAmt.replace(/\./g, '').replace(',', '.');
+      }
+      const numAmt = parseFloat(rawAmt) || 0;
+
+      // Extract Description & Reference
+      const mainDesc = descIdx !== -1 && row[descIdx] ? row[descIdx].trim() : '';
+      const refVal = refIdx !== -1 && row[refIdx] && refIdx !== descIdx ? row[refIdx].trim() : '';
+      let combinedNote = mainDesc;
+      if (refVal && !combinedNote.includes(refVal)) {
+        combinedNote = combinedNote ? `${combinedNote} [Ref: ${refVal}]` : `Ref: ${refVal}`;
+      }
+
+      // Determine Type (Multi-Language)
+      let rawType = typeIdx !== -1 && row[typeIdx] ? normalizeStr(row[typeIdx]) : '';
+      let typeVal = 'expense';
+
+      const incomeKeywords = ['entrata', 'entrate', 'accredito', 'accrediti', 'income', 'einnahme', 'credit', 'cr', 'deposit', 'rimborso', 'restituzione', 'ingreso', 'abono', 'revenu'];
+      const transferKeywords = ['trasferimento', 'giroconto', 'transfer', 'umbuchung', 'virement', 'transferencia'];
+      const expenseKeywords = ['uscita', 'uscite', 'addebito', 'addebiti', 'expense', 'ausgabe', 'debit', 'dr', 'withdrawal', 'spesa', 'pagamento', 'gasto', 'cargo', 'depense'];
+
+      if (incomeKeywords.some(k => rawType === k || rawType.includes(k))) {
+        typeVal = 'income';
+      } else if (transferKeywords.some(k => rawType === k || rawType.includes(k))) {
+        typeVal = 'transfer';
+      } else if (expenseKeywords.some(k => rawType === k || rawType.includes(k))) {
+        typeVal = 'expense';
+      } else {
+        if (isNegative) {
+          typeVal = 'expense';
+        } else if (/rimborso|ricarica|salary|stipendio/i.test(combinedNote)) {
+          typeVal = 'income';
+        } else {
+          typeVal = 'expense';
+        }
+      }
+
+      const explicitAcct = acctIdx !== -1 && row[acctIdx] ? row[acctIdx].trim() : '';
+      const acctVal = explicitAcct || suggestAccount(combinedNote);
+
+      const explicitCat = catIdx !== -1 && row[catIdx] ? row[catIdx].trim() : '';
+      const catVal = explicitCat || suggestCategory(combinedNote, typeVal);
+
+      return {
+        rowIndex: index + 1,
+        date: dateVal,
+        account_name: acctVal,
+        category_name: catVal,
+        type: typeVal,
+        amount: Math.abs(numAmt),
+        note: combinedNote,
+        isValid: Math.abs(numAmt) > 0
+      };
     });
   }
 };

@@ -1,6 +1,7 @@
 import json
 import csv
 import io
+import re
 from datetime import datetime, timedelta
 from server.db import query_all, query_one, execute_sql, get_db
 
@@ -38,10 +39,18 @@ def handle_api_request(method, path, body, query_params):
             interest_rate = float(body.get('interest_rate', 0))
             minimum_payment = float(body.get('minimum_payment', 0))
             due_day = int(body.get('due_day', 1))
+            next_payment_date = body.get('next_payment_date')
             color = body.get('color', '#EF4444')
+
+            is_loan = interest_rate > 0 or minimum_payment > 0 or bool(next_payment_date)
+            if is_loan and not next_payment_date and current_balance > 0:
+                next_payment_date = compute_next_payment_date(due_day)
+            elif not is_loan:
+                next_payment_date = None
+
             debt_id = execute_sql(
-                "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color)
+                "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date if next_payment_date else None, color)
             )
             debt = query_one("SELECT * FROM debts WHERE id = ?", (debt_id,))
             debt['payments'] = []
@@ -50,6 +59,7 @@ def handle_api_request(method, path, body, query_params):
             if action == 'payment':
                 amount = float(body.get('amount', 0))
                 account_id = body.get('account_id')
+                category_id = body.get('category_id')
                 date_str = body.get('date', datetime.now().strftime('%Y-%m-%d'))
                 note_str = body.get('note', '')
 
@@ -59,14 +69,32 @@ def handle_api_request(method, path, body, query_params):
                             (resource_id, amount, date_str, int(account_id) if account_id else None, note_str))
 
                 if account_id:
-                    cats = query_all("SELECT id FROM categories WHERE type = 'expense';")
-                    cat_id = cats[0]['id'] if cats else 1
+                    cat_id = int(category_id) if category_id else None
+                    if not cat_id:
+                        debt_cat = query_one("SELECT id FROM categories WHERE type = 'expense' AND (LOWER(name) LIKE '%debt%' OR LOWER(name) LIKE '%loan%');")
+                        if debt_cat:
+                            cat_id = debt_cat['id']
+                        else:
+                            cats = query_all("SELECT id FROM categories WHERE type = 'expense';")
+                            cat_id = cats[0]['id'] if cats else 1
+
                     debt = query_one("SELECT name FROM debts WHERE id = ?", (resource_id,))
                     debt_name = debt['name'] if debt else 'Debt'
                     tx_note = f"Debt Payment: {debt_name}" + (f" - {note_str}" if note_str else "")
                     execute_sql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
                                 (account_id, cat_id, amount, date_str, tx_note))
                     execute_sql("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, account_id))
+                    check_budget_alert(cat_id)
+
+                # Auto-advance next_payment_date if loan is active
+                debt = query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))
+                if debt:
+                    is_loan = debt['interest_rate'] > 0 or debt['minimum_payment'] > 0
+                    if debt['current_balance'] <= 0 or not is_loan:
+                        execute_sql("UPDATE debts SET next_payment_date = NULL WHERE id = ?", (resource_id,))
+                    elif debt['next_payment_date']:
+                        adv_date = advance_one_month(debt['next_payment_date'])
+                        execute_sql("UPDATE debts SET next_payment_date = ? WHERE id = ?", (adv_date, resource_id))
 
                 updated_debt = query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))
                 if updated_debt:
@@ -85,9 +113,17 @@ def handle_api_request(method, path, body, query_params):
                 interest_rate = float(body.get('interest_rate', 0))
                 minimum_payment = float(body.get('minimum_payment', 0))
                 due_day = int(body.get('due_day', 1))
+                next_payment_date = body.get('next_payment_date')
                 color = body.get('color', '#EF4444')
-                execute_sql("UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, color = ? WHERE id = ?",
-                            (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color, resource_id))
+
+                is_loan = interest_rate > 0 or minimum_payment > 0 or bool(next_payment_date)
+                if is_loan and not next_payment_date and current_balance > 0:
+                    next_payment_date = compute_next_payment_date(due_day)
+                elif not is_loan or current_balance <= 0:
+                    next_payment_date = None
+
+                execute_sql("UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, next_payment_date = ?, color = ? WHERE id = ?",
+                            (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date if next_payment_date else None, color, resource_id))
                 updated_debt = query_one("SELECT * FROM debts WHERE id = ?", (resource_id,))
                 if updated_debt:
                     updated_debt['payments'] = query_all("""
@@ -250,6 +286,97 @@ def handle_api_request(method, path, body, query_params):
             txs = query_all(query, args)
             return {"status": 200, "data": txs}
 
+        elif method == 'POST' and action == 'import':
+            items = body if isinstance(body, list) else body.get('transactions', [])
+            if not items:
+                return {"status": 400, "data": {"error": "No transactions provided for import"}}
+
+            all_accounts = query_all("SELECT * FROM accounts;")
+            all_categories = query_all("SELECT * FROM categories;")
+            if not all_accounts or not all_categories:
+                return {"status": 400, "data": {"error": "Cannot import transactions without existing accounts and categories"}}
+
+            inserted_count = 0
+            checked_categories = set()
+
+            for item in items:
+                acc_id = None
+                if item.get('account_id'):
+                    found = next((a for a in all_accounts if a['id'] == int(item['account_id'])), None)
+                    if found:
+                        acc_id = found['id']
+                if not acc_id and (item.get('account_name') or item.get('account')):
+                    name_q = str(item.get('account_name') or item.get('account')).strip().lower()
+                    found = next((a for a in all_accounts if a['name'].lower() == name_q), None)
+                    if found:
+                        acc_id = found['id']
+                if not acc_id:
+                    acc_id = all_accounts[0]['id']
+
+                tx_type = str(item.get('type', 'expense')).lower()
+                if tx_type not in ('income', 'expense', 'transfer'):
+                    tx_type = 'expense'
+
+                cat_id = None
+                if item.get('category_id'):
+                    found = next((c for c in all_categories if c['id'] == int(item['category_id'])), None)
+                    if found:
+                        cat_id = found['id']
+                if not cat_id and (item.get('category_name') or item.get('category')):
+                    cat_q = str(item.get('category_name') or item.get('category')).strip().lower()
+                    found = next((c for c in all_categories if c['name'].lower() == cat_q), None)
+                    if found:
+                        cat_id = found['id']
+                if not cat_id:
+                    match_cat = next((c for c in all_categories if c['type'] == tx_type), None)
+                    cat_id = match_cat['id'] if match_cat else all_categories[0]['id']
+
+                try:
+                    amount = abs(float(item.get('amount', 0)))
+                except (ValueError, TypeError):
+                    continue
+
+                if amount <= 0:
+                    continue
+
+                date_val = str(item.get('date') or datetime.now().strftime('%Y-%m-%d')).strip()
+                dmy = re.match(r'^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})$', date_val)
+                if dmy:
+                    date_val = f"{dmy.group(3)}-{dmy.group(2).zfill(2)}-{dmy.group(1).zfill(2)}"
+
+                note_val = item.get('note') or item.get('memo') or item.get('description') or ''
+                target_acc_id = int(item['target_account_id']) if item.get('target_account_id') else None
+
+                execute_sql(
+                    "INSERT INTO transactions (account_id, category_id, amount, type, date, note, target_account_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (acc_id, cat_id, amount, tx_type, date_val, note_val, target_acc_id)
+                )
+
+                if tx_type == 'income':
+                    execute_sql("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, acc_id))
+                elif tx_type == 'expense':
+                    execute_sql("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, acc_id))
+                elif tx_type == 'transfer' and target_acc_id:
+                    execute_sql("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, acc_id))
+                    execute_sql("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, target_acc_id))
+
+                if tx_type == 'expense':
+                    checked_categories.add(cat_id)
+
+                inserted_count += 1
+
+            for cid in checked_categories:
+                check_budget_alert(cid)
+
+            return {
+                "status": 201,
+                "data": {
+                    "success": True,
+                    "message": f"Successfully imported {inserted_count} transactions",
+                    "count": inserted_count
+                }
+            }
+
         elif method == 'POST':
             account_id = int(body['account_id'])
             category_id = int(body['category_id'])
@@ -376,6 +503,7 @@ def handle_api_request(method, path, body, query_params):
 
     if resource == 'notifications':
         if method == 'GET':
+            check_debt_payment_alerts()
             notifs = query_all("SELECT * FROM notifications ORDER BY id DESC LIMIT 50;")
             return {"status": 200, "data": notifs}
         elif method == 'PUT' and resource_id and action == 'read':
@@ -384,6 +512,73 @@ def handle_api_request(method, path, body, query_params):
         elif method == 'POST' and action == 'read-all':
             execute_sql("UPDATE notifications SET read = 1;")
             return {"status": 200, "data": {"message": "All marked read"}}
+
+
+def compute_next_payment_date(due_day):
+    today_dt = datetime.now()
+    day = min(max(int(due_day or 1), 1), 28)
+    target = datetime(today_dt.year, today_dt.month, day)
+    today_str = today_dt.strftime('%Y-%m-%d')
+    if target.strftime('%Y-%m-%d') < today_str:
+        month = today_dt.month % 12 + 1
+        year = today_dt.year + (1 if today_dt.month == 12 else 0)
+        target = datetime(year, month, day)
+    return target.strftime('%Y-%m-%d')
+
+
+def advance_one_month(date_str):
+    if not date_str:
+        return None
+    try:
+        parts = date_str.split('-')
+        year = int(parts[0])
+        month = int(parts[1]) - 1  # 0-indexed
+        day = int(parts[2])
+
+        month += 1
+        if month > 11:
+            month = 0
+            year += 1
+
+        if month == 11:
+            next_month_start = datetime(year + 1, 1, 1)
+        else:
+            next_month_start = datetime(year, month + 2, 1)
+        last_day_of_month = (next_month_start - timedelta(days=1)).day
+        clamped_day = min(day, last_day_of_month)
+        return datetime(year, month + 1, clamped_day).strftime('%Y-%m-%d')
+    except Exception:
+        return None
+
+
+def check_debt_payment_alerts():
+    debts = query_all("SELECT * FROM debts WHERE current_balance > 0 AND next_payment_date IS NOT NULL AND next_payment_date != '';")
+    today_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for d in debts:
+        try:
+            due_dt = datetime.strptime(d['next_payment_date'], '%Y-%m-%d')
+        except Exception:
+            continue
+        diff_days = (due_dt - today_dt).days
+        amount_val = d['minimum_payment'] if d['minimum_payment'] > 0 else d['current_balance']
+        amount_str = f"€{amount_val:.2f}"
+
+        if diff_days < 0:
+            msg = f"{d['name']} payment of {amount_str} was due on {d['next_payment_date']}"
+            existing = query_one("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", (msg,))
+            if not existing:
+                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", (msg,))
+        elif diff_days == 0:
+            msg = f"{d['name']} payment of {amount_str} is due today"
+            existing = query_one("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", (msg,))
+            if not existing:
+                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", (msg,))
+        elif diff_days <= 3:
+            msg = f"{d['name']} payment of {amount_str} is due in {diff_days} day(s) on {d['next_payment_date']}"
+            existing = query_one("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", (msg,))
+            if not existing:
+                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", (msg,))
 
     return {"status": 404, "data": {"error": "Endpoint not found"}}
 

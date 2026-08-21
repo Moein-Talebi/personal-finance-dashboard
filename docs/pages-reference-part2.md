@@ -73,9 +73,10 @@
 - Header with `#add-debt-btn`
 - **Mode Toggle Bar**:
   - `[ Money I Owe (Debts) | Money Owed to Me (Receivables) ]`
-- **Hero Overview Summary Banner**:
-  - Left: Total Remaining / Owed to You (hero number), Overall Progress bar (% repaid/collected and € amount), Active count, Monthly obligation / expected inflow.
-  - Right: 10-Day Cash Window (Needed for Next 10 Days on Borrowed, Expected Inflow in Next 10 Days on Lent).
+- **Hero Overview Summary Banner (3 Stat Cards)**:
+  - Card 1: Total Remaining / Owed to You (hero number), Progress bar (% repaid/collected and € amount), Active & Paid count.
+  - Card 2: Monthly Minimum Payments (or Expected Monthly Inflow for Lent) - prominent monthly obligation € amount, scheduled accounts count.
+  - Card 3: 10-Day Cash Window (Needed for Next 10 Days on Borrowed, Expected Inflow on Lent) with countdown and earliest due date.
 - **Dedicated 10-Day Urgent Action Strip**:
   - Horizontal quick-action pills for items arriving within 10 days with direct 1-click "Pay" (on borrowed) or "Receive" (on lent) button.
 - **Quick Filter Tabs**:

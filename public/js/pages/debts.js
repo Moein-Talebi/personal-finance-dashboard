@@ -173,82 +173,119 @@ const DebtTrackerPage = {
         </div>
 
         <!-- 1. Hero Overview Summary Banner -->
-        <div class="card" style="margin-bottom:1.5rem; padding:1.5rem; background:linear-gradient(135deg, var(--bg-card) 0%, var(--bg-tertiary, #f8f9fd) 100%); border:1px solid var(--border-color); border-radius:var(--radius-lg); box-shadow:var(--shadow-md);">
-          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:1.5rem; align-items:stretch;">
-            
-            <!-- Left: Global Balance & Repayment Progress -->
-            <div style="display:flex; flex-direction:column; justify-content:space-between; gap:1.25rem;">
-              <div>
-                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
-                  <div style="width:30px; height:30px; border-radius:var(--radius-md); background:${isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; display:flex; align-items:center; justify-content:center;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:1.25rem; margin-bottom:1.5rem;">
+          
+          <!-- Card 1: Global Balance & Repayment Progress -->
+          <div class="card" style="padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; border:1px solid var(--border-color); border-radius:var(--radius-lg); box-shadow:var(--shadow-sm);">
+            <div>
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <div style="width:32px; height:32px; border-radius:var(--radius-md); background:${isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; display:flex; align-items:center; justify-content:center;">
                     <i data-lucide="${isLentMode ? 'hand-coins' : 'credit-card'}" style="width:16px; height:16px;"></i>
                   </div>
-                  <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">
+                  <span style="font-size:0.82rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">
                     ${isLentMode ? 'Total Money Owed to You' : 'Total Remaining Debt'}
                   </span>
                 </div>
-                <div style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
-                  <h1 style="font-size:2.1rem; font-weight:800; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; line-height:1; margin:0;">${formatCurrency(totalBalance)}</h1>
-                  <span style="font-size:0.85rem; color:var(--text-muted);">of ${formatCurrency(totalOriginal)} original</span>
-                </div>
               </div>
-
-              <div>
-                <div style="display:flex; justify-content:space-between; font-size:0.82rem; font-weight:600; margin-bottom:0.4rem;">
-                  <span>${isLentMode ? 'Collection Progress' : 'Overall Repayment Progress'}</span>
-                  <span style="color:var(--color-success); font-weight:700;">${overallPct}% ${isLentMode ? 'Collected' : 'Repaid'} (${formatCurrency(totalRepaid)})</span>
-                </div>
-                <div class="progress-bar-bg" style="height:9px;">
-                  <div class="progress-bar-fill" style="width:${overallPct}%; background-color:var(--color-success);"></div>
-                </div>
-              </div>
-
-              <div style="display:flex; gap:1.5rem; flex-wrap:wrap; font-size:0.84rem; color:var(--text-secondary); padding-top:0.75rem; border-top:1px solid var(--border-color);">
-                <div>
-                  <span style="color:var(--text-muted);">${isLentMode ? 'Active Debtors:' : 'Active Accounts:'}</span> <strong>${activeCount}</strong>
-                </div>
-                <div>
-                  <span style="color:var(--text-muted);">${isLentMode ? 'Expected Monthly Inflow:' : 'Monthly Obligation:'}</span> <strong style="color:var(--color-warning);">${formatCurrency(totalMonthlyMin)}/mo</strong>
-                </div>
+              <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
+                <h1 style="font-size:1.9rem; font-weight:800; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; line-height:1; margin:0;">${formatCurrency(totalBalance)}</h1>
+                <span style="font-size:0.8rem; color:var(--text-muted);">of ${formatCurrency(totalOriginal)}</span>
               </div>
             </div>
 
-            <!-- Right: 10-Day Cash Window Box -->
-            <div style="background:var(--bg-card); border:1.5px solid ${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)') : 'var(--border-color)'}; border-radius:var(--radius-md); padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
-              <div style="display:flex; justify-content:space-between; align-items:flex-start;">
-                <div>
-                  <span style="font-size:0.8rem; font-weight:700; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; text-transform:uppercase; letter-spacing:0.04em; display:flex; align-items:center; gap:0.4rem;">
-                    <i data-lucide="${neededNext10Days > 0 ? 'clock' : 'check-circle-2'}" style="width:15px; height:15px;"></i>
-                    ${isLentMode ? 'Expected Inflow in Next 10 Days' : 'Cash Needed for Next 10 Days'}
-                  </span>
-                  <div style="font-size:1.9rem; font-weight:800; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; margin-top:0.35rem; line-height:1.1;">
-                    ${formatCurrency(neededNext10Days)}
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:0.8rem; font-weight:600; margin-bottom:0.35rem;">
+                <span>${isLentMode ? 'Collection Progress' : 'Repayment Progress'}</span>
+                <span style="color:var(--color-success); font-weight:700;">${overallPct}% (${formatCurrency(totalRepaid)})</span>
+              </div>
+              <div class="progress-bar-bg" style="height:8px;">
+                <div class="progress-bar-fill" style="width:${overallPct}%; background-color:var(--color-success);"></div>
+              </div>
+            </div>
+
+            <div style="font-size:0.8rem; color:var(--text-muted); padding-top:0.5rem; border-top:1px solid var(--border-color); display:flex; justify-content:space-between;">
+              <span>${isLentMode ? 'Active Debtors:' : 'Active Accounts:'} <strong>${activeCount}</strong></span>
+              <span>Paid Off: <strong>${paidCount}</strong></span>
+            </div>
+          </div>
+
+          <!-- Card 2: Monthly Minimum Payments / Obligations Due This Month -->
+          <div class="card" style="padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; border:1px solid var(--border-color); border-radius:var(--radius-lg); box-shadow:var(--shadow-sm);">
+            <div>
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <div style="width:32px; height:32px; border-radius:var(--radius-md); background:rgba(245, 158, 11, 0.15); color:var(--color-warning); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="calendar" style="width:16px; height:16px;"></i>
                   </div>
+                  <span style="font-size:0.82rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">
+                    ${isLentMode ? 'Expected Monthly Inflow' : 'Monthly Minimum Payments'}
+                  </span>
                 </div>
-                <div style="width:40px; height:40px; border-radius:var(--radius-full); background:${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)') : 'rgba(59, 130, 246, 0.15)'}; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; display:flex; align-items:center; justify-content:center;">
-                  <i data-lucide="${isLentMode ? 'arrow-down-to-dot' : 'alert-triangle'}" style="width:20px; height:20px;"></i>
+                <span style="font-size:0.75rem; font-weight:700; color:var(--color-warning); background:rgba(245, 158, 11, 0.12); padding:0.15rem 0.5rem; border-radius:var(--radius-full);">
+                  This Month
+                </span>
+              </div>
+              <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
+                <h1 style="font-size:1.9rem; font-weight:800; color:var(--color-warning); line-height:1; margin:0;">${formatCurrency(totalMonthlyMin)}</h1>
+                <span style="font-size:0.8rem; color:var(--text-muted);">/ month</span>
+              </div>
+            </div>
+
+            <div style="font-size:0.83rem; color:var(--text-secondary); line-height:1.4;">
+              ${isLentMode 
+                ? `Total expected incoming installments from debtors for this month.`
+                : `Total fixed minimum installments required to stay on schedule this month.`}
+            </div>
+
+            <div style="font-size:0.8rem; color:var(--text-muted); padding-top:0.5rem; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+              <span>Accounts with schedule:</span>
+              <strong style="color:var(--text-primary);">${activeModeDebts.filter(d => (d.current_balance || 0) > 0 && ((d.minimum_payment || 0) > 0 || (d.due_day && d.due_day > 1))).length}</strong>
+            </div>
+          </div>
+
+          <!-- Card 3: 10-Day Cash Window Box -->
+          <div class="card" style="padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; border:1.5px solid ${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)') : 'var(--border-color)'}; border-radius:var(--radius-lg); box-shadow:var(--shadow-sm); background:${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.02)' : 'rgba(245, 158, 11, 0.02)') : 'var(--bg-card)'};">
+            <div>
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <div style="width:32px; height:32px; border-radius:var(--radius-md); background:${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)') : 'rgba(59, 130, 246, 0.15)'}; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="${neededNext10Days > 0 ? 'clock' : 'check-circle-2'}" style="width:16px; height:16px;"></i>
+                  </div>
+                  <span style="font-size:0.82rem; font-weight:700; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; text-transform:uppercase; letter-spacing:0.04em;">
+                    ${isLentMode ? 'Expected (Next 10 Days)' : 'Needed (Next 10 Days)'}
+                  </span>
                 </div>
+                ${neededNext10Days > 0 ? `
+                  <span style="font-size:0.75rem; font-weight:700; color:${isLentMode ? 'var(--color-success)' : 'var(--color-warning)'}; background:${isLentMode ? 'rgba(16, 185, 129, 0.12)' : 'rgba(245, 158, 11, 0.12)'}; padding:0.15rem 0.5rem; border-radius:var(--radius-full);">
+                    Due Soon
+                  </span>
+                ` : ''}
               </div>
-
-              <div style="font-size:0.84rem; color:var(--text-muted); line-height:1.45;">
-                ${debtsDueNext10Days.length > 0 
-                  ? `<strong>${debtsDueNext10Days.length} installment(s)</strong> ${isLentMode ? 'scheduled to be received' : 'require payment'} in the next 10 days.`
-                  : (isLentMode ? `No incoming repayments scheduled within the next 10 days.` : `No upcoming debt payments required within the next 10 days.`)}
+              <div style="display:flex; align-items:baseline; gap:0.6rem; flex-wrap:wrap;">
+                <h1 style="font-size:1.9rem; font-weight:800; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; line-height:1; margin:0;">${formatCurrency(neededNext10Days)}</h1>
+                <span style="font-size:0.8rem; color:var(--text-muted);">${debtsDueNext10Days.length} installment(s)</span>
               </div>
+            </div>
 
+            <div style="font-size:0.83rem; color:var(--text-muted); line-height:1.4;">
+              ${debtsDueNext10Days.length > 0 
+                ? (isLentMode ? `Expected repayments arriving in the next 10 days.` : `Required payments due in the next 10 days.`)
+                : (isLentMode ? `No incoming repayments in next 10 days.` : `No debt payments required in next 10 days.`)}
+            </div>
+
+            <div style="font-size:0.8rem; padding-top:0.5rem; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+              <span style="color:var(--text-secondary);">Earliest:</span>
               ${debtsDueNext10Days.length > 0 ? `
-                <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-tertiary, #f8f9fd); padding:0.5rem 0.75rem; border-radius:var(--radius-sm); font-size:0.8rem; border:1px solid var(--border-color);">
-                  <span style="font-weight:600; color:var(--text-secondary);">Earliest Date:</span>
-                  <span style="font-weight:700; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'};">${this.getEffectiveDueDate(debtsDueNext10Days[0])}</span>
-                </div>
+                <strong style="color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'};">${this.getEffectiveDueDate(debtsDueNext10Days[0])}</strong>
               ` : `
-                <div style="font-size:0.8rem; color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:0.35rem;">
-                  <i data-lucide="shield-check" style="width:14px; height:14px;"></i> All schedules are up to date!
-                </div>
+                <span style="color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:0.25rem;">
+                  <i data-lucide="shield-check" style="width:13px; height:13px;"></i> Clear
+                </span>
               `}
             </div>
-
           </div>
+
         </div>
 
         <!-- 2. Dedicated 10-Day Urgent Action Strip (if any due soon) -->

@@ -1,82 +1,392 @@
 const DebtTrackerPage = {
   debts: [],
   accounts: [],
+  categories: [],
+  expenseCategories: [],
+  incomeCategories: [],
+  expandedHistories: {},
+  activeMode: 'borrowed', // 'borrowed' (I owe) or 'lent' (someone owes me)
+  currentFilter: 'all',
+
+  getEffectiveDueDate(debt) {
+    if (debt.next_payment_date) return debt.next_payment_date;
+    if (debt.due_day && (debt.current_balance || 0) > 0) {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const dueDay = Math.min(Math.max(parseInt(debt.due_day, 10) || 1, 1), 28);
+      let target = new Date(currentYear, currentMonth, dueDay);
+      const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const targetStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+      if (targetStr < todayStr) {
+        target = new Date(currentYear, currentMonth + 1, dueDay);
+      }
+      return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+    }
+    return null;
+  },
+
+  getDaysDifference(targetDateStr) {
+    if (!targetDateStr) return null;
+    const [tYear, tMonth, tDay] = targetDateStr.split('-').map(Number);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const target = new Date(tYear, tMonth - 1, tDay);
+    return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  },
 
   async render(container) {
-    container.innerHTML = `<div class="loading-spinner">Loading debt payoff tracker...</div>`;
+    container.innerHTML = `<div class="loading-spinner">Loading debt & receivables tracker...</div>`;
 
     try {
-      const [debtRes, acctRes] = await Promise.all([
+      const [debtRes, acctRes, catRes] = await Promise.all([
         API.get('/api/debts'),
-        API.get('/api/accounts')
+        API.get('/api/accounts'),
+        API.get('/api/categories')
       ]);
 
-      this.debts = debtRes;
-      this.accounts = acctRes;
+      this.debts = debtRes || [];
+      this.accounts = acctRes || [];
+      this.categories = catRes || [];
+      this.expenseCategories = this.categories.filter(c => c.type === 'expense');
+      this.incomeCategories = this.categories.filter(c => c.type === 'income');
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return '�' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
-      const totalDebt = this.debts.reduce((sum, d) => sum + d.current_balance, 0);
-      const totalMinPayments = this.debts.reduce((sum, d) => sum + d.minimum_payment, 0);
+      const isLentMode = this.activeMode === 'lent';
+
+      // Separate debts into borrowed vs lent
+      const borrowedDebts = this.debts.filter(d => (d.type || 'borrowed') === 'borrowed');
+      const lentDebts = this.debts.filter(d => d.type === 'lent');
+
+      // Debts for the current active mode
+      const activeModeDebts = isLentMode ? lentDebts : borrowedDebts;
+
+      // Sort current mode debts by arrival date
+      activeModeDebts.sort((a, b) => {
+        const aPaid = (a.current_balance || 0) <= 0;
+        const bPaid = (b.current_balance || 0) <= 0;
+
+        if (aPaid && !bPaid) return 1;
+        if (!aPaid && bPaid) return -1;
+
+        const dateA = this.getEffectiveDueDate(a);
+        const dateB = this.getEffectiveDueDate(b);
+
+        if (dateA && dateB) {
+          if (dateA !== dateB) return dateA < dateB ? -1 : 1;
+        }
+
+        if (dateA && !dateB) return -1;
+        if (!dateA && dateB) return 1;
+
+        return (b.current_balance || 0) - (a.current_balance || 0);
+      });
+
+      const totalOriginal = activeModeDebts.reduce((sum, d) => sum + (d.total_amount || 0), 0);
+      const totalBalance = activeModeDebts.reduce((sum, d) => sum + (d.current_balance || 0), 0);
+      const totalRepaid = Math.max(0, totalOriginal - totalBalance);
+      const overallPct = totalOriginal > 0 ? Math.min(100, Math.round((totalRepaid / totalOriginal) * 100)) : 100;
+      const totalMonthlyMin = activeModeDebts.reduce((sum, d) => sum + (d.minimum_payment || 0), 0);
+
+      // Debts due in the next 10 days
+      const debtsDueNext10Days = activeModeDebts.filter(d => {
+        if ((d.current_balance || 0) <= 0) return false;
+        const dueDate = this.getEffectiveDueDate(d);
+        if (!dueDate) return false;
+        const diffDays = this.getDaysDifference(dueDate);
+        return diffDays !== null && diffDays <= 10;
+      });
+
+      const neededNext10Days = debtsDueNext10Days.reduce((sum, d) => {
+        const amt = (d.minimum_payment && d.minimum_payment > 0)
+          ? Math.min(d.minimum_payment, d.current_balance)
+          : d.current_balance;
+        return sum + (amt || 0);
+      }, 0);
+
+      const activeCount = activeModeDebts.filter(d => (d.current_balance || 0) > 0).length;
+      const personalCount = activeModeDebts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) <= 0).length;
+      const bankCount = activeModeDebts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) > 0).length;
+      const paidCount = activeModeDebts.filter(d => (d.current_balance || 0) <= 0).length;
+
+      // Filter displayed debts according to selected tab
+      let displayedDebts = activeModeDebts;
+      let emptyMessage = isLentMode 
+        ? "You currently have no lent money or receivable records configured."
+        : "You currently have no borrowed money or loan accounts configured.";
+
+      if (this.currentFilter === 'due10') {
+        displayedDebts = debtsDueNext10Days;
+        emptyMessage = isLentMode
+          ? "No incoming repayments expected in the next 10 days."
+          : "No debt payments due in the next 10 days! All obligations are clear.";
+      } else if (this.currentFilter === 'personal') {
+        displayedDebts = activeModeDebts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) <= 0);
+        emptyMessage = isLentMode 
+          ? "No active 0% personal loans lent to others."
+          : "No active personal (0% interest) loans configured.";
+      } else if (this.currentFilter === 'bank') {
+        displayedDebts = activeModeDebts.filter(d => (d.current_balance || 0) > 0 && (d.interest_rate || 0) > 0);
+        emptyMessage = isLentMode
+          ? "No active loans with interest/fees configured."
+          : "No active bank or interest-bearing loans configured.";
+      } else if (this.currentFilter === 'paid') {
+        displayedDebts = activeModeDebts.filter(d => (d.current_balance || 0) <= 0);
+        emptyMessage = isLentMode
+          ? "No fully collected / completed loans yet."
+          : "No paid-off debt accounts yet. Keep up the payoff momentum!";
+      }
 
       container.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+        <!-- Header -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:1rem;">
           <div>
-            <h2 style="font-size:1.25rem; font-weight:700;">Debt Tracker & Payoff Manager</h2>
-            <p style="color:var(--text-muted); font-size:0.88rem;">Track loans, balances, interest rates, and payoff progress</p>
+            <h2 style="font-size:1.35rem; font-weight:800; letter-spacing:-0.02em;">
+              ${isLentMode ? 'Money Lent & Receivables Tracker' : 'Debt Tracker & Borrowed Money'}
+            </h2>
+            <p style="color:var(--text-muted); font-size:0.88rem;">
+              ${isLentMode 
+                ? 'Track money you lent to others, expected incoming repayments, and collection history'
+                : 'Monitor total borrowed balances, short-term cash needs, and installment payoff schedules'}
+            </p>
           </div>
 
           <button class="btn btn-primary" id="add-debt-btn">
-            <i data-lucide="plus"></i> Add Debt
+            <i data-lucide="plus"></i> ${isLentMode ? 'Add Lent Money / Receivable' : 'Add Debt / Borrowed Money'}
           </button>
         </div>
 
-        <div class="grid-cols-4" style="margin-bottom:1.5rem;">
-          <div class="card stat-card">
-            <div class="stat-header">
-              <span>Total Remaining Debt</span>
-              <div class="stat-icon danger"><i data-lucide="credit-card"></i></div>
-            </div>
-            <div class="stat-value" style="color:var(--color-danger);">${formatCurrency(totalDebt)}</div>
-            <div class="stat-sub">Across ${this.debts.length} debt accounts</div>
-          </div>
-
-          <div class="card stat-card">
-            <div class="stat-header">
-              <span>Monthly Minimum Payments</span>
-              <div class="stat-icon warning"><i data-lucide="calendar"></i></div>
-            </div>
-            <div class="stat-value" style="color:var(--color-warning);">${formatCurrency(totalMinPayments)}</div>
-            <div class="stat-sub">Required monthly obligation</div>
+        <!-- Mode Toggle: Money I Owe vs Money Owed to Me -->
+        <div style="display:flex; justify-content:center; margin-bottom:1.5rem;">
+          <div style="background:var(--bg-tertiary, #f1f5f9); padding:0.35rem; border-radius:var(--radius-full); display:inline-flex; gap:0.4rem; border:1px solid var(--border-color);">
+            <button class="btn ${!isLentMode ? 'btn-primary' : 'btn-outline'} btn-sm debt-mode-btn" data-mode="borrowed" style="border-radius:var(--radius-full); padding:0.45rem 1.25rem; font-weight:700; font-size:0.88rem; display:inline-flex; align-items:center; gap:0.45rem;">
+              <i data-lucide="arrow-down-left" style="width:16px; height:16px;"></i> Money I Owe (Debts) (${borrowedDebts.length})
+            </button>
+            <button class="btn ${isLentMode ? 'btn-primary' : 'btn-outline'} btn-sm debt-mode-btn" data-mode="lent" style="border-radius:var(--radius-full); padding:0.45rem 1.25rem; font-weight:700; font-size:0.88rem; display:inline-flex; align-items:center; gap:0.45rem;">
+              <i data-lucide="arrow-up-right" style="width:16px; height:16px;"></i> Money Owed to Me (${lentDebts.length})
+            </button>
           </div>
         </div>
 
+        <!-- 1. Hero Overview Summary Banner -->
+        <div class="card" style="margin-bottom:1.5rem; padding:1.5rem; background:linear-gradient(135deg, var(--bg-card) 0%, var(--bg-tertiary, #f8f9fd) 100%); border:1px solid var(--border-color); border-radius:var(--radius-lg); box-shadow:var(--shadow-md);">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:1.5rem; align-items:stretch;">
+            
+            <!-- Left: Global Balance & Repayment Progress -->
+            <div style="display:flex; flex-direction:column; justify-content:space-between; gap:1.25rem;">
+              <div>
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem;">
+                  <div style="width:30px; height:30px; border-radius:var(--radius-md); background:${isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="${isLentMode ? 'hand-coins' : 'credit-card'}" style="width:16px; height:16px;"></i>
+                  </div>
+                  <span style="font-size:0.85rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">
+                    ${isLentMode ? 'Total Money Owed to You' : 'Total Remaining Debt'}
+                  </span>
+                </div>
+                <div style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+                  <h1 style="font-size:2.1rem; font-weight:800; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; line-height:1; margin:0;">${formatCurrency(totalBalance)}</h1>
+                  <span style="font-size:0.85rem; color:var(--text-muted);">of ${formatCurrency(totalOriginal)} original</span>
+                </div>
+              </div>
+
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:0.82rem; font-weight:600; margin-bottom:0.4rem;">
+                  <span>${isLentMode ? 'Collection Progress' : 'Overall Repayment Progress'}</span>
+                  <span style="color:var(--color-success); font-weight:700;">${overallPct}% ${isLentMode ? 'Collected' : 'Repaid'} (${formatCurrency(totalRepaid)})</span>
+                </div>
+                <div class="progress-bar-bg" style="height:9px;">
+                  <div class="progress-bar-fill" style="width:${overallPct}%; background-color:var(--color-success);"></div>
+                </div>
+              </div>
+
+              <div style="display:flex; gap:1.5rem; flex-wrap:wrap; font-size:0.84rem; color:var(--text-secondary); padding-top:0.75rem; border-top:1px solid var(--border-color);">
+                <div>
+                  <span style="color:var(--text-muted);">${isLentMode ? 'Active Debtors:' : 'Active Accounts:'}</span> <strong>${activeCount}</strong>
+                </div>
+                <div>
+                  <span style="color:var(--text-muted);">${isLentMode ? 'Expected Monthly Inflow:' : 'Monthly Obligation:'}</span> <strong style="color:var(--color-warning);">${formatCurrency(totalMonthlyMin)}/mo</strong>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right: 10-Day Cash Window Box -->
+            <div style="background:var(--bg-card); border:1.5px solid ${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.4)' : 'rgba(245, 158, 11, 0.4)') : 'var(--border-color)'}; border-radius:var(--radius-md); padding:1.35rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                <div>
+                  <span style="font-size:0.8rem; font-weight:700; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; text-transform:uppercase; letter-spacing:0.04em; display:flex; align-items:center; gap:0.4rem;">
+                    <i data-lucide="${neededNext10Days > 0 ? 'clock' : 'check-circle-2'}" style="width:15px; height:15px;"></i>
+                    ${isLentMode ? 'Expected Inflow in Next 10 Days' : 'Cash Needed for Next 10 Days'}
+                  </span>
+                  <div style="font-size:1.9rem; font-weight:800; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; margin-top:0.35rem; line-height:1.1;">
+                    ${formatCurrency(neededNext10Days)}
+                  </div>
+                </div>
+                <div style="width:40px; height:40px; border-radius:var(--radius-full); background:${neededNext10Days > 0 ? (isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)') : 'rgba(59, 130, 246, 0.15)'}; color:${neededNext10Days > 0 ? (isLentMode ? 'var(--color-success)' : 'var(--color-warning)') : 'var(--color-info)'}; display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="${isLentMode ? 'arrow-down-to-dot' : 'alert-triangle'}" style="width:20px; height:20px;"></i>
+                </div>
+              </div>
+
+              <div style="font-size:0.84rem; color:var(--text-muted); line-height:1.45;">
+                ${debtsDueNext10Days.length > 0 
+                  ? `<strong>${debtsDueNext10Days.length} installment(s)</strong> ${isLentMode ? 'scheduled to be received' : 'require payment'} in the next 10 days.`
+                  : (isLentMode ? `No incoming repayments scheduled within the next 10 days.` : `No upcoming debt payments required within the next 10 days.`)}
+              </div>
+
+              ${debtsDueNext10Days.length > 0 ? `
+                <div style="display:flex; align-items:center; justify-content:space-between; background:var(--bg-tertiary, #f8f9fd); padding:0.5rem 0.75rem; border-radius:var(--radius-sm); font-size:0.8rem; border:1px solid var(--border-color);">
+                  <span style="font-weight:600; color:var(--text-secondary);">Earliest Date:</span>
+                  <span style="font-weight:700; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'};">${this.getEffectiveDueDate(debtsDueNext10Days[0])}</span>
+                </div>
+              ` : `
+                <div style="font-size:0.8rem; color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:0.35rem;">
+                  <i data-lucide="shield-check" style="width:14px; height:14px;"></i> All schedules are up to date!
+                </div>
+              `}
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 2. Dedicated 10-Day Urgent Action Strip (if any due soon) -->
+        ${debtsDueNext10Days.length > 0 ? `
+          <div class="card" style="margin-bottom:1.5rem; padding:1.15rem 1.35rem; border:1px solid ${isLentMode ? 'rgba(16, 185, 129, 0.35)' : 'rgba(245, 158, 11, 0.35)'}; background:${isLentMode ? 'rgba(16, 185, 129, 0.04)' : 'rgba(245, 158, 11, 0.04)'}; border-radius:var(--radius-md);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.85rem; flex-wrap:wrap; gap:0.5rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div style="width:28px; height:28px; border-radius:var(--radius-md); background:${isLentMode ? 'var(--color-success)' : 'var(--color-warning)'}; color:#fff; display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="${isLentMode ? 'arrow-down-left' : 'zap'}" style="width:16px; height:16px;"></i>
+                </div>
+                <div>
+                  <h3 style="font-size:0.95rem; font-weight:700; color:var(--text-primary);">
+                    ${isLentMode ? `Expected Incoming in Next 10 Days (${debtsDueNext10Days.length})` : `Due in the Next 10 Days (${debtsDueNext10Days.length})`}
+                  </h3>
+                  <span style="font-size:0.75rem; color:var(--text-muted);">
+                    ${isLentMode ? 'Quick-receive repayments and deposit into your account balance' : 'Quick-pay installments due soon to avoid late fees or delays'}
+                  </span>
+                </div>
+              </div>
+              <span style="font-size:0.8rem; font-weight:700; color:${isLentMode ? 'var(--color-success)' : 'var(--color-warning)'}; background:var(--bg-card); padding:0.25rem 0.65rem; border-radius:var(--radius-full); border:1px solid ${isLentMode ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'};">
+                Total: ${formatCurrency(neededNext10Days)}
+              </span>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:0.75rem;">
+              ${debtsDueNext10Days.map(d => {
+                const dueDate = this.getEffectiveDueDate(d);
+                const diffDays = this.getDaysDifference(dueDate);
+                const defaultAmount = (d.minimum_payment && d.minimum_payment > 0) ? Math.min(d.minimum_payment, d.current_balance) : d.current_balance;
+
+                let badgeBg = isLentMode ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+                let badgeColor = isLentMode ? 'var(--color-success)' : 'var(--color-warning)';
+                let badgeText = `In ${diffDays}d`;
+                if (diffDays < 0) {
+                  badgeBg = 'rgba(239, 68, 68, 0.15)';
+                  badgeColor = 'var(--color-danger)';
+                  badgeText = `${Math.abs(diffDays)}d overdue`;
+                } else if (diffDays === 0) {
+                  badgeBg = isLentMode ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.15)';
+                  badgeColor = isLentMode ? 'var(--color-success)' : 'var(--color-danger)';
+                  badgeText = 'Due Today';
+                }
+
+                return `
+                  <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-card); padding:0.65rem 0.85rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); gap:0.5rem;">
+                    <div style="min-width:0;">
+                      <div style="font-weight:700; font-size:0.88rem; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        ${d.name}
+                      </div>
+                      <div style="display:flex; align-items:center; gap:0.4rem; font-size:0.75rem; margin-top:0.15rem;">
+                        <span style="padding:0.1rem 0.4rem; border-radius:var(--radius-sm); background:${badgeBg}; color:${badgeColor}; font-weight:700;">
+                          ${badgeText}
+                        </span>
+                        <span style="color:var(--text-muted);">${dueDate}</span>
+                      </div>
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                      <div style="font-weight:800; color:${isLentMode ? 'var(--color-success)' : 'var(--color-danger)'}; font-size:0.9rem; white-space:nowrap;">
+                        ${formatCurrency(defaultAmount)}
+                      </div>
+                      <button class="btn ${isLentMode ? 'btn-success' : 'btn-primary'} btn-sm make-payment-btn" data-id="${d.id}" style="padding:0.25rem 0.6rem; font-size:0.75rem; white-space:nowrap; ${isLentMode ? 'background:var(--color-success); border-color:var(--color-success); color:#fff;' : ''}">
+                        ${isLentMode ? 'Receive' : 'Pay'}
+                      </button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- 3. Quick Filter Tabs Navigation -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:0.75rem;">
+          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;" id="debt-filter-tabs">
+            <button class="btn ${this.currentFilter === 'all' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="all" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              ${isLentMode ? 'All Receivables' : 'All Debts'} (${activeModeDebts.length})
+            </button>
+            <button class="btn ${this.currentFilter === 'due10' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="due10" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="clock" style="width:13px; height:13px;"></i> ${isLentMode ? 'Incoming in 10 Days' : 'Due in 10 Days'} (${debtsDueNext10Days.length})
+            </button>
+            <button class="btn ${this.currentFilter === 'personal' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="personal" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="hand-coins" style="width:13px; height:13px;"></i> ${isLentMode ? '0% Personal Loans' : 'Personal Loans'} (${personalCount})
+            </button>
+            <button class="btn ${this.currentFilter === 'bank' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="bank" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="landmark" style="width:13px; height:13px;"></i> ${isLentMode ? 'With Interest/Fees' : 'Bank Loans'} (${bankCount})
+            </button>
+            <button class="btn ${this.currentFilter === 'paid' ? 'btn-primary' : 'btn-outline'} btn-sm filter-tab-btn" data-filter="paid" style="font-size:0.8rem; padding:0.4rem 0.8rem;">
+              <i data-lucide="check" style="width:13px; height:13px;"></i> ${isLentMode ? 'Fully Collected' : 'Paid Off'} (${paidCount})
+            </button>
+          </div>
+
+          <span style="font-size:0.8rem; color:var(--text-muted);">
+            Showing <strong>${displayedDebts.length}</strong> of ${activeModeDebts.length} records
+          </span>
+        </div>
+
+        <!-- 4. Cards Grid (Sorted by arrival date) -->
         <div class="grid-cols-2">
-          ${this.debts.length === 0 ? '<div class="card" style="grid-column:1/-1; color:var(--text-muted);">No debt records found 🎉</div>' : this.debts.map(d => {
-            const paidDown = Math.max(0, d.total_amount - d.current_balance);
+          ${displayedDebts.length === 0 ? `
+            <div class="card" style="grid-column:1/-1; color:var(--text-muted); text-align:center; padding:3rem 1.5rem;">
+              <div style="width:48px; height:48px; border-radius:var(--radius-full); background:var(--bg-tertiary, #f8f9fd); display:inline-flex; align-items:center; justify-content:center; margin-bottom:0.75rem;">
+                <i data-lucide="check-circle-2" style="width:24px; height:24px; color:var(--color-success);"></i>
+              </div>
+              <div style="font-weight:700; font-size:1.05rem; color:var(--text-primary);">${emptyMessage}</div>
+              <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.25rem;">Use the button above to add a new record.</p>
+            </div>
+          ` : displayedDebts.map(d => {
+            const isLentItem = d.type === 'lent';
+            const paidDown = Math.max(0, (d.total_amount || 0) - (d.current_balance || 0));
             const pct = d.total_amount > 0 ? Math.min(100, Math.round((paidDown / d.total_amount) * 100)) : 0;
+            const payments = d.payments || [];
+            const isHistoryOpen = !!this.expandedHistories[d.id];
+            const isFullyPaid = d.current_balance <= 0;
 
             return `
-              <div class="card" style="display:flex; flex-direction:column; gap:1.25rem;">
+              <div class="card" style="display:flex; flex-direction:column; gap:1.25rem; border:1px solid ${isFullyPaid ? 'rgba(16,185,129,0.3)' : 'var(--border-color)'};">
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                   <div style="display:flex; align-items:center; gap:0.85rem;">
-                    <div style="width:44px; height:44px; border-radius:var(--radius-md); background:${d.color}22; color:${d.color}; display:flex; align-items:center; justify-content:center;">
-                      <i data-lucide="credit-card"></i>
+                    <div style="width:44px; height:44px; border-radius:var(--radius-md); background:${d.color || (isLentItem ? '#10B981' : '#EF4444')}22; color:${d.color || (isLentItem ? '#10B981' : '#EF4444')}; display:flex; align-items:center; justify-content:center;">
+                      <i data-lucide="${d.interest_rate > 0 ? 'landmark' : 'hand-coins'}"></i>
                     </div>
                     <div>
-                      <h3 style="font-size:1.1rem; font-weight:700;">${d.name}</h3>
-                      <span style="font-size:0.78rem; color:var(--color-warning); font-weight:600;">${d.interest_rate}% APR</span>
+                      <div style="display:flex; align-items:center; gap:0.5rem;">
+                        <h3 style="font-size:1.1rem; font-weight:700;">${d.name}</h3>
+                        ${isFullyPaid ? `<span style="font-size:0.72rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:var(--radius-full); background:rgba(16, 185, 129, 0.15); color:var(--color-success);">${isLentItem ? 'Fully Collected' : 'Paid Off'}</span>` : ''}
+                      </div>
+                      <span style="font-size:0.78rem; color:${d.interest_rate > 0 ? 'var(--color-warning)' : 'var(--color-info)'}; font-weight:600;">
+                        ${d.interest_rate > 0 ? `${d.interest_rate}% APR` : (isLentItem ? 'Personal Loan to Friend (0%)' : 'Personal Loan (0% Interest)')}
+                      </span>
                     </div>
                   </div>
 
                   <div style="display:flex; gap:0.4rem;">
-                    <button class="icon-btn edit-debt-btn" data-id="${d.id}" style="width:32px; height:32px;">
+                    <button class="icon-btn edit-debt-btn" data-id="${d.id}" style="width:32px; height:32px;" title="Edit Record">
                       <i data-lucide="edit-2" style="width:14px; height:14px;"></i>
                     </button>
-                    <button class="icon-btn delete-debt-btn" data-id="${d.id}" style="width:32px; height:32px; color:var(--color-danger);">
+                    <button class="icon-btn delete-debt-btn" data-id="${d.id}" style="width:32px; height:32px; color:var(--color-danger);" title="Delete Record">
                       <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
                     </button>
                   </div>
@@ -84,25 +394,99 @@ const DebtTrackerPage = {
 
                 <div>
                   <div style="display:flex; justify-content:space-between; font-size:0.9rem; font-weight:600; margin-bottom:0.3rem;">
-                    <span>Owed: <strong style="color:var(--color-danger);">${formatCurrency(d.current_balance)}</strong></span>
-                    <span>Original: <strong>${formatCurrency(d.total_amount)}</strong></span>
+                    <span>${isLentItem ? 'Remaining Owed:' : 'Remaining:'} <strong style="color:${isFullyPaid ? 'var(--color-success)' : (isLentItem ? 'var(--color-primary)' : 'var(--color-danger)')};">${formatCurrency(d.current_balance)}</strong></span>
+                    <span>${isLentItem ? 'Total Lent:' : 'Original:'} <strong>${formatCurrency(d.total_amount)}</strong></span>
                   </div>
 
                   <div class="progress-bar-bg" style="height:10px;">
                     <div class="progress-bar-fill" style="width:${pct}%; background-color:var(--color-success);"></div>
                   </div>
 
-                  <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:var(--text-muted); margin-top:0.4rem;">
-                    <span>${pct}% paid off (${formatCurrency(paidDown)})</span>
-                    <span>Min payment: ${formatCurrency(d.minimum_payment)}/mo</span>
+                  <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:var(--text-muted); margin-top:0.4rem; flex-wrap:wrap; gap:0.25rem;">
+                    <span>${pct}% ${isLentItem ? 'collected' : 'paid off'} (${formatCurrency(paidDown)})</span>
+                    <span>${d.minimum_payment > 0 ? `${isLentItem ? 'Expected installment' : 'Target installment'}: ${formatCurrency(d.minimum_payment)}/mo` : 'Flexible repayment'}</span>
                   </div>
+
+                  ${!isFullyPaid ? (() => {
+                    const effectiveDate = this.getEffectiveDueDate(d);
+                    if (effectiveDate) {
+                      const diffDays = this.getDaysDifference(effectiveDate);
+
+                      let badgeColor = 'var(--text-muted)';
+                      let dateText = effectiveDate;
+                      if (diffDays < 0) {
+                        badgeColor = 'var(--color-danger)';
+                        dateText = `${effectiveDate} (${Math.abs(diffDays)}d overdue)`;
+                      } else if (diffDays === 0) {
+                        badgeColor = isLentItem ? 'var(--color-success)' : 'var(--color-danger)';
+                        dateText = `${effectiveDate} (Due Today)`;
+                      } else if (diffDays <= 3) {
+                        badgeColor = isLentItem ? 'var(--color-success)' : 'var(--color-warning)';
+                        dateText = `${effectiveDate} (Due in ${diffDays}d)`;
+                      } else if (diffDays <= 10) {
+                        badgeColor = isLentItem ? 'var(--color-success)' : 'var(--color-warning)';
+                        dateText = `${effectiveDate} (Due in ${diffDays}d)`;
+                      } else {
+                        dateText = `${effectiveDate} (In ${diffDays}d)`;
+                      }
+
+                      return `
+                        <div style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; font-weight:600; color:${badgeColor}; margin-top:0.4rem;">
+                          <i data-lucide="calendar-clock" style="width:14px; height:14px;"></i>
+                          <span>${isLentItem ? 'Next Expected Repayment:' : 'Next Payment Date:'} <strong>${dateText}</strong></span>
+                        </div>
+                      `;
+                    }
+                    return `
+                      <div style="display:flex; align-items:center; gap:0.35rem; font-size:0.8rem; color:var(--text-muted); margin-top:0.4rem;">
+                        <i data-lucide="calendar-clock" style="width:14px; height:14px;"></i>
+                        <span>${isLentItem ? 'Next Expected Repayment:' : 'Next Payment Date:'} No scheduled date</span>
+                      </div>
+                    `;
+                  })() : ''}
                 </div>
 
-                <div style="display:flex; justify-content:flex-end;">
-                  <button class="btn btn-primary btn-sm make-payment-btn" data-id="${d.id}">
-                    <i data-lucide="dollar-sign"></i> Make Payment
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border-color);">
+                  <button class="btn btn-outline btn-sm toggle-history-btn" data-id="${d.id}" style="font-size:0.8rem; padding:0.35rem 0.75rem;">
+                    <i data-lucide="${isHistoryOpen ? 'chevron-up' : 'history'}"></i>
+                    <span>${isHistoryOpen ? 'Hide History' : `Payment History (${payments.length})`}</span>
+                  </button>
+
+                  <button class="btn ${isLentItem ? 'btn-success' : 'btn-primary'} btn-sm make-payment-btn" data-id="${d.id}" ${isFullyPaid ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : (isLentItem ? 'style="background:var(--color-success); border-color:var(--color-success); color:#fff;"' : '')}>
+                    <i data-lucide="${isLentItem ? 'arrow-down-left' : 'dollar-sign'}"></i> ${isLentItem ? 'Receive Repayment' : 'Pay Installment'}
                   </button>
                 </div>
+
+                ${isHistoryOpen ? `
+                  <div class="debt-history-section" style="background:var(--bg-tertiary, #f8f9fd); border-radius:var(--radius-md); padding:0.85rem; border:1px solid var(--border-color); margin-top:0.25rem;">
+                    <div style="font-size:0.8rem; font-weight:700; color:var(--text-secondary); margin-bottom:0.6rem; display:flex; align-items:center; gap:0.35rem;">
+                      <i data-lucide="list" style="width:14px; height:14px;"></i> ${isLentItem ? 'Repayment Collection Log' : 'Installment Payment Log'}
+                    </div>
+
+                    ${payments.length === 0 ? `
+                      <div style="font-size:0.8rem; color:var(--text-muted); text-align:center; padding:0.75rem 0;">
+                        No payments logged yet. Click "${isLentItem ? 'Receive Repayment' : 'Pay Installment'}" to record transactions.
+                      </div>
+                    ` : `
+                      <div style="display:flex; flex-direction:column; gap:0.45rem;">
+                        ${payments.map(p => `
+                          <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-card); padding:0.5rem 0.75rem; border-radius:var(--radius-sm); border:1px solid var(--border-color); font-size:0.82rem;">
+                            <div>
+                              <div style="font-weight:600; color:var(--text-primary);">${p.date}</div>
+                              <div style="font-size:0.75rem; color:var(--text-muted);">
+                                ${p.account_name ? `${isLentItem ? 'Deposited to:' : 'From:'} ${p.account_name}` : 'Cash / Direct'}
+                                ${p.note ? ` - ${p.note}` : ''}
+                              </div>
+                            </div>
+                            <div style="font-weight:700; color:var(--color-success); font-size:0.9rem;">
+                              ${isLentItem ? '+' : '-'}${formatCurrency(p.amount)}
+                            </div>
+                          </div>
+                        `).join('')}
+                      </div>
+                    `}
+                  </div>
+                ` : ''}
               </div>
             `;
           }).join('')}
@@ -118,64 +502,128 @@ const DebtTrackerPage = {
   },
 
   attachEvents(container) {
-    document.getElementById('add-debt-btn').addEventListener('click', () => this.openDebtModal());
+    document.getElementById('add-debt-btn')?.addEventListener('click', () => this.openDebtModal(null, this.activeMode));
 
     container.addEventListener('click', async (e) => {
+      const modeBtn = e.target.closest('.debt-mode-btn');
+      if (modeBtn) {
+        this.activeMode = modeBtn.getAttribute('data-mode');
+        this.currentFilter = 'all';
+        this.render(container);
+        return;
+      }
+
+      const filterBtn = e.target.closest('.filter-tab-btn');
+      if (filterBtn) {
+        this.currentFilter = filterBtn.getAttribute('data-filter');
+        this.render(container);
+        return;
+      }
+
       const paymentBtn = e.target.closest('.make-payment-btn');
-      if (paymentBtn) {
-        const id = parseInt(paymentBtn.getAttribute('data-id'));
+      if (paymentBtn && !paymentBtn.disabled) {
+        const id = parseInt(paymentBtn.getAttribute('data-id'), 10);
         const debt = this.debts.find(d => d.id === id);
         if (debt) this.openPaymentModal(debt);
+        return;
+      }
+
+      const historyBtn = e.target.closest('.toggle-history-btn');
+      if (historyBtn) {
+        const id = parseInt(historyBtn.getAttribute('data-id'), 10);
+        this.expandedHistories[id] = !this.expandedHistories[id];
+        this.render(container);
+        return;
       }
 
       const editBtn = e.target.closest('.edit-debt-btn');
       if (editBtn) {
-        const id = parseInt(editBtn.getAttribute('data-id'));
+        const id = parseInt(editBtn.getAttribute('data-id'), 10);
         const debt = this.debts.find(d => d.id === id);
         if (debt) this.openDebtModal(debt);
+        return;
       }
 
       const deleteBtn = e.target.closest('.delete-debt-btn');
       if (deleteBtn) {
-        const id = parseInt(deleteBtn.getAttribute('data-id'));
-        if (confirm('Delete this debt record?')) {
+        const id = parseInt(deleteBtn.getAttribute('data-id'), 10);
+        if (confirm('Delete this record and all its payment history?')) {
           await API.delete(`/api/debts/${id}`);
-          Toast.show('Debt record deleted', 'success');
+          Toast.show('Record deleted', 'success');
           this.render(container);
         }
       }
     });
   },
 
-  openDebtModal(debt = null) {
+  openDebtModal(debt = null, defaultType = null) {
     const isEdit = !!debt;
+    const initialType = debt ? (debt.type || 'borrowed') : (defaultType || this.activeMode || 'borrowed');
 
     const contentHTML = `
       <form id="debt-form">
+        <!-- Type Switcher (I Borrowed vs I Lent) -->
+        <div class="form-group" style="margin-bottom:1.25rem;">
+          <label style="font-weight:700; margin-bottom:0.5rem; display:block;">Record Classification</label>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
+            <label style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0.85rem; border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; background:var(--bg-card);" id="type-borrowed-label">
+              <input type="radio" name="modal-debt-type" value="borrowed" ${initialType === 'borrowed' ? 'checked' : ''}>
+              <div>
+                <div style="font-weight:700; font-size:0.88rem; color:var(--color-danger);">Money I Borrowed</div>
+                <small style="color:var(--text-muted); font-size:0.75rem;">I owe money to someone / bank</small>
+              </div>
+            </label>
+            <label style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0.85rem; border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; background:var(--bg-card);" id="type-lent-label">
+              <input type="radio" name="modal-debt-type" value="lent" ${initialType === 'lent' ? 'checked' : ''}>
+              <div>
+                <div style="font-weight:700; font-size:0.88rem; color:var(--color-success);">Money I Lent</div>
+                <small style="color:var(--text-muted); font-size:0.75rem;">Someone owes money to me</small>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        ${!isEdit ? `
+          <div style="background:var(--bg-tertiary, #f8f9fd); padding:0.75rem 1rem; border-radius:var(--radius-md); margin-bottom:1.25rem; border:1px solid var(--border-color);">
+            <div style="font-size:0.78rem; font-weight:700; color:var(--text-secondary); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.35rem;">
+              <i data-lucide="zap" style="width:13px; height:13px; color:var(--color-primary);"></i> Quick Preset
+            </div>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;" id="presets-container">
+              <button type="button" class="btn btn-outline" id="preset-friend" style="font-size:0.8rem; padding:0.35rem 0.75rem; border-radius:var(--radius-full); display:inline-flex; align-items:center; gap:0.35rem;">
+                <i data-lucide="hand-coins" style="width:14px; height:14px; color:var(--color-info);"></i> Personal / Friend Loan (0%)
+              </button>
+              <button type="button" class="btn btn-outline" id="preset-commercial" style="font-size:0.8rem; padding:0.35rem 0.75rem; border-radius:var(--radius-full); display:inline-flex; align-items:center; gap:0.35rem;">
+                <i data-lucide="landmark" style="width:14px; height:14px; color:var(--color-warning);"></i> Bank Loan / Installment
+              </button>
+            </div>
+          </div>
+        ` : ''}
+
         <div class="form-group">
-          <label>Debt Name</label>
-          <input type="text" id="modal-debt-name" class="form-control" value="${debt ? debt.name : ''}" placeholder="e.g. Car Loan, Credit Card" required>
+          <label id="lbl-debt-name">${initialType === 'lent' ? 'Borrower / Debtor Name' : 'Debt / Loan Name'}</label>
+          <input type="text" id="modal-debt-name" class="form-control" value="${debt ? debt.name : ''}" placeholder="${initialType === 'lent' ? 'e.g. Lent to Sarah, Alex Loan' : 'e.g. Borrowed from John, Car Loan'}" required>
         </div>
 
         <div class="form-row">
           <div class="form-group">
-            <label>Original Total ($)</label>
-            <input type="number" step="0.01" id="modal-debt-total" class="form-control" value="${debt ? debt.total_amount : 1000}" required>
+            <label id="lbl-debt-total">${initialType === 'lent' ? 'Total Amount Lent (€)' : 'Total Borrowed / Original Amount (€)'}</label>
+            <input type="number" step="0.01" id="modal-debt-total" class="form-control" value="${debt ? debt.total_amount : ''}" placeholder="1000.00" required>
           </div>
           <div class="form-group">
-            <label>Current Balance ($)</label>
-            <input type="number" step="0.01" id="modal-debt-balance" class="form-control" value="${debt ? debt.current_balance : 1000}" required>
+            <label id="lbl-debt-balance">${initialType === 'lent' ? 'Current Remaining Owed to You (€)' : 'Current Remaining Balance (€)'}</label>
+            <input type="number" step="0.01" id="modal-debt-balance" class="form-control" value="${debt ? debt.current_balance : ''}" placeholder="1000.00" required>
           </div>
         </div>
 
         <div class="form-row">
           <div class="form-group">
             <label>Interest Rate (% APR)</label>
-            <input type="number" step="0.1" id="modal-debt-rate" class="form-control" value="${debt ? debt.interest_rate : 5.0}">
+            <input type="number" step="0.1" id="modal-debt-rate" class="form-control" value="${debt ? debt.interest_rate : 0}" placeholder="0 for friend/family loans">
+            <small style="color:var(--text-muted); font-size:0.75rem;">Leave 0 for personal loans</small>
           </div>
           <div class="form-group">
-            <label>Minimum Monthly Payment ($)</label>
-            <input type="number" step="0.01" id="modal-debt-min" class="form-control" value="${debt ? debt.minimum_payment : 50}">
+            <label id="lbl-debt-min">${initialType === 'lent' ? 'Expected Monthly Repayment (€)' : 'Target Monthly Installment (€)'}</label>
+            <input type="number" step="0.01" id="modal-debt-min" class="form-control" value="${debt ? debt.minimum_payment : 0}" placeholder="Optional installment target">
           </div>
         </div>
 
@@ -185,78 +633,215 @@ const DebtTrackerPage = {
             <input type="number" min="1" max="31" id="modal-debt-day" class="form-control" value="${debt ? debt.due_day : 1}">
           </div>
           <div class="form-group">
-            <label>Color Theme</label>
-            <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : '#EF4444'}" style="height:42px; padding:0.2rem;">
+            <label id="lbl-debt-date">${initialType === 'lent' ? 'Next Expected Repayment Date' : 'Next Payment Date'}</label>
+            <input type="date" id="modal-debt-next-date" class="form-control" value="${debt && debt.next_payment_date ? debt.next_payment_date : ''}">
+            <small style="color:var(--text-muted); font-size:0.75rem;">Date of upcoming payment</small>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Color Theme</label>
+          <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : (initialType === 'lent' ? '#10B981' : '#EF4444')}" style="height:42px; padding:0.2rem;">
+        </div>
+      </form>
+    `;
+
+    Modal.open({
+      title: isEdit ? `Edit Record: ${debt.name}` : (initialType === 'lent' ? 'Add Lent Money Record' : 'Add Debt Record'),
+      contentHTML,
+      onSave: async () => {
+        const typeEl = document.querySelector('input[name="modal-debt-type"]:checked');
+        const type = typeEl ? typeEl.value : 'borrowed';
+        const name = document.getElementById('modal-debt-name').value;
+        const total_amount = parseFloat(document.getElementById('modal-debt-total').value || 0);
+        let current_balance_val = document.getElementById('modal-debt-balance').value;
+        const current_balance = current_balance_val !== '' ? parseFloat(current_balance_val) : total_amount;
+        const interest_rate = parseFloat(document.getElementById('modal-debt-rate').value || 0);
+        const minimum_payment = parseFloat(document.getElementById('modal-debt-min').value || 0);
+        const due_day = parseInt(document.getElementById('modal-debt-day').value || 1, 10);
+        const next_payment_date = document.getElementById('modal-debt-next-date').value || null;
+        const color = document.getElementById('modal-debt-color').value;
+
+        if (!name || total_amount <= 0) {
+          Toast.show('Valid name and total amount are required', 'warning');
+          return false;
+        }
+
+        if (isEdit) {
+          await API.put(`/api/debts/${debt.id}`, { name, type, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color });
+          Toast.show('Record updated!', 'success');
+        } else {
+          await API.post('/api/debts', { name, type, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color });
+          Toast.show('Record created!', 'success');
+        }
+
+        this.activeMode = type;
+        const container = document.getElementById('page-content');
+        this.render(container);
+        return true;
+      }
+    });
+
+    // Dynamic type switching in modal
+    const typeRadios = document.querySelectorAll('input[name="modal-debt-type"]');
+    typeRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const isLent = e.target.value === 'lent';
+        const nameLbl = document.getElementById('lbl-debt-name');
+        const totalLbl = document.getElementById('lbl-debt-total');
+        const balanceLbl = document.getElementById('lbl-debt-balance');
+        const minLbl = document.getElementById('lbl-debt-min');
+        const dateLbl = document.getElementById('lbl-debt-date');
+        const nameInput = document.getElementById('modal-debt-name');
+        const colorInput = document.getElementById('modal-debt-color');
+
+        if (nameLbl) nameLbl.textContent = isLent ? 'Borrower / Debtor Name' : 'Debt / Loan Name';
+        if (totalLbl) totalLbl.textContent = isLent ? 'Total Amount Lent (€)' : 'Total Borrowed / Original Amount (€)';
+        if (balanceLbl) balanceLbl.textContent = isLent ? 'Current Remaining Owed to You (€)' : 'Current Remaining Balance (€)';
+        if (minLbl) minLbl.textContent = isLent ? 'Expected Monthly Repayment (€)' : 'Target Monthly Installment (€)';
+        if (dateLbl) dateLbl.textContent = isLent ? 'Next Expected Repayment Date' : 'Next Payment Date';
+        if (nameInput && !nameInput.value) {
+          nameInput.placeholder = isLent ? 'e.g. Lent to Sarah, Alex Loan' : 'e.g. Borrowed from John, Car Loan';
+        }
+        if (colorInput && !isEdit) {
+          colorInput.value = isLent ? '#10B981' : '#EF4444';
+        }
+      });
+    });
+
+    if (!isEdit) {
+      document.getElementById('preset-friend')?.addEventListener('click', () => {
+        const nameEl = document.getElementById('modal-debt-name');
+        const rateEl = document.getElementById('modal-debt-rate');
+        const colorEl = document.getElementById('modal-debt-color');
+        const dateEl = document.getElementById('modal-debt-next-date');
+        const typeEl = document.querySelector('input[name="modal-debt-type"]:checked');
+        const isLent = typeEl && typeEl.value === 'lent';
+
+        if (nameEl && !nameEl.value) nameEl.placeholder = isLent ? 'e.g. Lent to Sarah' : 'e.g. Borrowed from Alex';
+        if (rateEl) rateEl.value = '0';
+        if (colorEl) colorEl.value = isLent ? '#10B981' : '#3B82F6';
+        if (dateEl) dateEl.value = '';
+      });
+
+      document.getElementById('preset-commercial')?.addEventListener('click', () => {
+        const nameEl = document.getElementById('modal-debt-name');
+        const rateEl = document.getElementById('modal-debt-rate');
+        const colorEl = document.getElementById('modal-debt-color');
+        const dateEl = document.getElementById('modal-debt-next-date');
+        const typeEl = document.querySelector('input[name="modal-debt-type"]:checked');
+        const isLent = typeEl && typeEl.value === 'lent';
+
+        if (nameEl && !nameEl.value) nameEl.placeholder = isLent ? 'e.g. Client Project Advance' : 'e.g. Bank Personal Loan';
+        if (rateEl && rateEl.value === '0') rateEl.value = '5.0';
+        if (colorEl) colorEl.value = isLent ? '#10B981' : '#EF4444';
+        if (dateEl && !dateEl.value) {
+          const now = new Date();
+          const target = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+          dateEl.value = target.toISOString().split('T')[0];
+        }
+      });
+
+      const totalInput = document.getElementById('modal-debt-total');
+      const balanceInput = document.getElementById('modal-debt-balance');
+      totalInput?.addEventListener('input', (e) => {
+        if (!balanceInput.value || balanceInput.dataset.manual !== 'true') {
+          balanceInput.value = e.target.value;
+        }
+      });
+      balanceInput?.addEventListener('input', () => {
+        balanceInput.dataset.manual = 'true';
+      });
+    }
+  },
+
+  openPaymentModal(debt) {
+    const isLent = debt.type === 'lent';
+    const today = new Date().toISOString().split('T')[0];
+    const defaultAmount = debt.minimum_payment > 0 ? Math.min(debt.minimum_payment, debt.current_balance) : debt.current_balance;
+
+    const contentHTML = `
+      <form id="debt-pay-form">
+        <div style="background:var(--bg-tertiary, #f8f9fd); padding:0.85rem 1rem; border-radius:var(--radius-md); margin-bottom:1.25rem; border:1px solid var(--border-color);">
+          <div style="font-weight:700; font-size:0.95rem; margin-bottom:0.25rem;">${debt.name}</div>
+          <div style="font-size:0.82rem; color:var(--text-muted); display:flex; gap:0.75rem; flex-wrap:wrap;">
+            <span><strong>${isLent ? 'Total Lent:' : 'Total Borrowed:'}</strong> €${(debt.total_amount || 0).toFixed(2)}</span>
+            <span><strong>${isLent ? 'Remaining Owed to You:' : 'Remaining Balance:'}</strong> <strong style="color:${isLent ? 'var(--color-success)' : 'var(--color-danger)'};">€${(debt.current_balance || 0).toFixed(2)}</strong></span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>${isLent ? 'Repayment Amount Received (€)' : 'Installment Payment Amount (€)'}</label>
+          <input type="number" step="0.01" id="pay-amount" class="form-control" value="${defaultAmount || ''}" max="${debt.current_balance}" placeholder="0.00" required autofocus>
+          <small style="color:var(--text-muted); font-size:0.75rem;">${isLent ? 'Enter the amount received from the debtor' : 'Enter the amount of this installment payment'}</small>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Payment Date</label>
+            <input type="date" id="pay-date" class="form-control" value="${today}" required>
+          </div>
+          <div class="form-group">
+            <label>${isLent ? 'Deposit Into Bank Account' : 'Paid From Bank Account'}</label>
+            <select id="pay-account" class="form-control">
+              <option value="">Cash / Direct (${isLent ? 'Do not deposit to bank' : 'Do not deduct from bank'})</option>
+              ${this.accounts.map(a => `<option value="${a.id}">${a.name} (€${a.balance.toFixed(2)})</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>${isLent ? 'Income Category' : 'Budget Expense Category'}</label>
+            <select id="pay-category" class="form-control">
+              ${isLent 
+                ? (this.incomeCategories.length > 0 ? this.incomeCategories : [{ id: 1, name: 'Other Income' }]).map(c => `<option value="${c.id}">${c.name}</option>`).join('')
+                : this.expenseCategories.map(c => {
+                    const isDebtCat = c.name.toLowerCase().includes('debt') || c.name.toLowerCase().includes('loan');
+                    return `<option value="${c.id}" ${isDebtCat ? 'selected' : ''}>${c.name}</option>`;
+                  }).join('')
+              }
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Payment Memo / Note</label>
+            <input type="text" id="pay-note" class="form-control" placeholder="${isLent ? 'e.g. Cash repayment, Partial payment' : 'e.g. Installment 1 of 4, Cash repayment'}" value="${isLent ? 'Repayment received' : 'Installment payment'}">
           </div>
         </div>
       </form>
     `;
 
     Modal.open({
-      title: isEdit ? `Edit Debt: ${debt.name}` : 'Add Debt Record',
-      contentHTML,
-      onSave: async () => {
-        const name = document.getElementById('modal-debt-name').value;
-        const total_amount = parseFloat(document.getElementById('modal-debt-total').value || 0);
-        const current_balance = parseFloat(document.getElementById('modal-debt-balance').value || 0);
-        const interest_rate = parseFloat(document.getElementById('modal-debt-rate').value || 0);
-        const minimum_payment = parseFloat(document.getElementById('modal-debt-min').value || 0);
-        const due_day = int(document.getElementById('modal-debt-day').value || 1);
-        const color = document.getElementById('modal-debt-color').value;
-
-        if (!name || total_amount <= 0) {
-          Toast.show('Valid debt name and total amount are required', 'warning');
-          return false;
-        }
-
-        if (isEdit) {
-          await API.put(`/api/debts/${debt.id}`, { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color });
-          Toast.show('Debt record updated!', 'success');
-        } else {
-          await API.post('/api/debts', { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, color });
-          Toast.show('Debt record created!', 'success');
-        }
-
-        const container = document.getElementById('page-content');
-        this.render(container);
-        return true;
-      }
-    });
-  },
-
-  openPaymentModal(debt) {
-    const contentHTML = `
-      <form id="debt-pay-form">
-        <div class="form-group">
-          <label>Payment Amount ($)</label>
-          <input type="number" step="0.01" id="pay-amount" class="form-control" value="${debt.minimum_payment || 50}" required>
-        </div>
-
-        <div class="form-group">
-          <label>Pay From Account</label>
-          <select id="pay-account" class="form-control">
-            <option value="">Do not deduct from bank account</option>
-            ${this.accounts.map(a => `<option value="${a.id}">${a.name} ($${a.balance.toFixed(2)})</option>`).join('')}
-          </select>
-        </div>
-      </form>
-    `;
-
-    Modal.open({
-      title: `Record Debt Payment: ${debt.name}`,
+      title: isLent ? `Record Repayment Received: ${debt.name}` : `Record Installment Payment: ${debt.name}`,
+      saveText: isLent ? 'Confirm & Deposit Repayment' : 'Confirm Payment',
       contentHTML,
       onSave: async () => {
         const amount = parseFloat(document.getElementById('pay-amount').value || 0);
         const account_id = document.getElementById('pay-account').value;
+        const category_id = document.getElementById('pay-category')?.value;
+        const date = document.getElementById('pay-date').value;
+        const note = document.getElementById('pay-note').value;
 
         if (!amount || amount <= 0) {
-          Toast.show('Please enter a valid payment amount', 'warning');
+          Toast.show('Please enter a valid amount', 'warning');
           return false;
         }
 
-        await API.put(`/api/debts/${debt.id}/payment`, { amount, account_id });
-        Toast.show(`Payment of $${amount.toFixed(2)} recorded for ${debt.name}!`, 'success');
+        if (amount > debt.current_balance + 0.01) {
+          if (!confirm(`Payment amount (€${amount.toFixed(2)}) is higher than remaining balance (€${debt.current_balance.toFixed(2)}). Continue?`)) {
+            return false;
+          }
+        }
 
+        const res = await API.post(`/api/debts/${debt.id}/payment`, { amount, account_id, category_id, date, note });
+        const nextDateMsg = res && res.next_payment_date ? ` Next date: ${res.next_payment_date}` : '';
+        Toast.show(`${isLent ? 'Repayment' : 'Payment'} of €${amount.toFixed(2)} recorded!${nextDateMsg}`, 'success');
+
+        if (window.updateNotificationBadges) {
+          window.updateNotificationBadges();
+        }
+
+        this.expandedHistories[debt.id] = true;
         const container = document.getElementById('page-content');
         this.render(container);
         return true;
@@ -264,3 +849,4 @@ const DebtTrackerPage = {
     });
   }
 };
+

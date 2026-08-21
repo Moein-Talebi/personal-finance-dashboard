@@ -12,7 +12,7 @@ const GoalsPage = {
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return '�' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
       // Summary statistics
@@ -106,7 +106,7 @@ const GoalsPage = {
                   </div>
                   <div class="flex-between" style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.5rem; font-weight:600;">
                     <span class="status-pill ${statusClass}">${statusText} (${pct}%)</span>
-                    <span>${remaining === 0 ? '🎉 Completed!' : formatCurrency(remaining) + ' left'}</span>
+                    <span>${remaining === 0 ? '<span style="display:inline-flex; align-items:center; gap:0.25rem;"><i data-lucide="check-circle-2" style="width:12px; height:12px; color:var(--color-success);"></i> Completed!</span>' : formatCurrency(remaining) + ' left'}</span>
                   </div>
                 </div>
 
@@ -235,11 +235,11 @@ const GoalsPage = {
 
         <div class="form-row">
           <div class="form-group">
-            <label>Target Budget ($)</label>
+            <label>Target Budget (€)</label>
             <input type="number" step="50" id="modal-goal-target" class="form-control" value="${goal ? goal.target_amount : 1000}" required>
           </div>
           <div class="form-group">
-            <label>Current Funds ($)</label>
+            <label>Current Funds (€)</label>
             <input type="number" step="50" id="modal-goal-current" class="form-control" value="${goal ? goal.current_amount : 0}">
           </div>
         </div>
@@ -291,7 +291,7 @@ const GoalsPage = {
     const contentHTML = `
       <form id="contrib-form">
         <div class="form-group">
-          <label>Contribution Amount ($)</label>
+          <label>Contribution Amount (€)</label>
           <input type="number" step="10" id="contrib-amount" class="form-control" placeholder="250.00" style="font-size:1.5rem; font-weight:800; text-align:center;" required>
         </div>
       </form>
@@ -308,7 +308,7 @@ const GoalsPage = {
         }
 
         await API.put(`/api/goals/${goal.id}`, { contribution: contrib });
-        Toast.show(`Contributed $${contrib.toFixed(2)} to ${goal.name}!`, 'success');
+        Toast.show(`Contributed €${contrib.toFixed(2)} to ${goal.name}!`, 'success');
         const container = document.getElementById('page-content');
         this.render(container);
         return true;

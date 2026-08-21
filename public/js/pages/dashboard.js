@@ -10,7 +10,7 @@ const DashboardPage = {
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return (num < 0 ? '-' : '') + '�' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (num < 0 ? '-' : '') + '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
       // Helper to dynamically read theme colors for ChartJS
@@ -111,6 +111,108 @@ const DashboardPage = {
               <div class="donut-legend" id="donut-legend-container">
                 <!-- Injected dynamically -->
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cross-section Connection Row: Upcoming Bills & Upcoming Deadlines -->
+        <div class="grid-cols-2 m-bottom-8">
+          <!-- Upcoming Bills & Subscriptions -->
+          <div class="card">
+            <div class="flex-between m-bottom-6">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div style="width:32px; height:32px; border-radius:var(--radius-md); background:rgba(110, 84, 255, 0.12); color:var(--color-primary); display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="repeat" style="width:16px; height:16px;"></i>
+                </div>
+                <h3 style="font-size:1.15rem; font-weight:800;">Upcoming Bills & Subscriptions</h3>
+              </div>
+              <a href="#recurring" style="font-size:0.85rem; font-weight:700; color:var(--color-primary);">View All &rarr;</a>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:0.85rem;">
+              ${!data.upcoming_bills || data.upcoming_bills.length === 0 ? `
+                <div style="color:var(--text-muted); text-align:center; padding:1.75rem; font-size:0.88rem;">
+                  No active bills or subscriptions due soon.
+                </div>
+              ` : data.upcoming_bills.map(b => {
+                const today = new Date().toISOString().split('T')[0];
+                const isOverdue = b.next_due < today;
+                const isDueToday = b.next_due === today;
+
+                return `
+                  <div style="display:flex; justify-content:space-between; align-items:center; padding:0.85rem 1rem; background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-md);">
+                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                      <div style="width:36px; height:36px; border-radius:var(--radius-full); background:var(--bg-tertiary); color:var(--color-primary); display:flex; align-items:center; justify-content:center;">
+                        <i data-lucide="credit-card" style="width:16px; height:16px;"></i>
+                      </div>
+                      <div>
+                        <div style="font-weight:700; font-size:0.92rem; color:var(--text-primary);">${b.name}</div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:0.4rem; margin-top:2px;">
+                          <span>Due: <strong>${b.next_due}</strong></span>
+                          <span>•</span>
+                          <span>${b.category_name || 'Bill'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style="text-align:right;">
+                      <div style="font-weight:800; font-size:0.95rem; color:var(--color-danger);">-${formatCurrency(b.amount)}</div>
+                      <span style="font-size:0.7rem; font-weight:700; padding:0.15rem 0.45rem; border-radius:var(--radius-full); background:${isOverdue ? 'rgba(239,68,68,0.15)' : (isDueToday ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.12)')}; color:${isOverdue ? 'var(--color-danger)' : (isDueToday ? 'var(--color-warning)' : 'var(--color-info)')};">
+                        ${isOverdue ? 'Overdue' : (isDueToday ? 'Due Today' : 'Upcoming')}
+                      </span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <!-- Upcoming Deadlines -->
+          <div class="card">
+            <div class="flex-between m-bottom-6">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <div style="width:32px; height:32px; border-radius:var(--radius-md); background:rgba(245, 158, 11, 0.12); color:var(--color-warning); display:flex; align-items:center; justify-content:center;">
+                  <i data-lucide="calendar-clock" style="width:16px; height:16px;"></i>
+                </div>
+                <h3 style="font-size:1.15rem; font-weight:800;">Financial Deadlines</h3>
+              </div>
+              <a href="#deadlines" style="font-size:0.85rem; font-weight:700; color:var(--color-primary);">Manage &rarr;</a>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:0.85rem;">
+              ${!data.upcoming_deadlines || data.upcoming_deadlines.length === 0 ? `
+                <div style="color:var(--text-muted); text-align:center; padding:1.75rem; font-size:0.88rem;">
+                  No active deadlines pending.
+                </div>
+              ` : data.upcoming_deadlines.map(d => {
+                const today = new Date().toISOString().split('T')[0];
+                const isOverdue = d.due_date < today;
+
+                let priorityClass = 'info';
+                if (d.priority === 'high') priorityClass = 'danger';
+                if (d.priority === 'medium') priorityClass = 'warning';
+
+                return `
+                  <div style="display:flex; justify-content:space-between; align-items:center; padding:0.85rem 1rem; background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-md);">
+                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                      <div style="width:36px; height:36px; border-radius:var(--radius-full); background:var(--bg-tertiary); color:${isOverdue ? 'var(--color-danger)' : 'var(--color-warning)'}; display:flex; align-items:center; justify-content:center;">
+                        <i data-lucide="alert-circle" style="width:16px; height:16px;"></i>
+                      </div>
+                      <div>
+                        <div style="font-weight:700; font-size:0.92rem; color:var(--text-primary);">${d.title}</div>
+                        <div style="font-size:0.75rem; color:var(--text-muted); margin-top:2px;">
+                          Due: <strong>${d.due_date}</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style="text-align:right;">
+                      ${d.amount > 0 ? `<div style="font-weight:800; font-size:0.95rem; color:var(--text-primary);">${formatCurrency(d.amount)}</div>` : ''}
+                      <span class="status-pill ${priorityClass}" style="font-size:0.7rem; text-transform:capitalize;">${d.priority}</span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         </div>

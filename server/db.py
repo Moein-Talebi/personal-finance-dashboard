@@ -89,13 +89,27 @@ def init_db():
     CREATE TABLE IF NOT EXISTS debts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        type TEXT DEFAULT 'borrowed', -- borrowed (I owe), lent (someone owes me)
         total_amount REAL NOT NULL,
         current_balance REAL NOT NULL,
         interest_rate REAL DEFAULT 0.0,
         minimum_payment REAL DEFAULT 0.0,
         due_day INTEGER DEFAULT 1,
+        next_payment_date TEXT DEFAULT NULL,
         color TEXT DEFAULT '#EF4444',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS debt_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        debt_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        date TEXT NOT NULL,
+        account_id INTEGER,
+        note TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS deadlines (
@@ -116,6 +130,32 @@ def init_db():
     cols = [r['name'] for r in cursor.fetchall()]
     if 'expense_type' not in cols:
         cursor.execute("ALTER TABLE categories ADD COLUMN expense_type TEXT DEFAULT 'variable';")
+
+    # Alter debts table if next_payment_date or type column missing
+    cursor.execute("PRAGMA table_info(debts);")
+    debt_cols = [r['name'] for r in cursor.fetchall()]
+    if 'next_payment_date' not in debt_cols:
+        cursor.execute("ALTER TABLE debts ADD COLUMN next_payment_date TEXT DEFAULT NULL;")
+    if 'type' not in debt_cols:
+        cursor.execute("ALTER TABLE debts ADD COLUMN type TEXT DEFAULT 'borrowed';")
+        cursor.execute("UPDATE debts SET type = 'borrowed' WHERE type IS NULL;")
+
+    # Clear next_payment_date for non-loan borrowed money (0% interest & 0 min payment)
+    cursor.execute("UPDATE debts SET next_payment_date = NULL WHERE (interest_rate IS NULL OR interest_rate = 0) AND (minimum_payment IS NULL OR minimum_payment = 0);")
+
+    # Auto-populate next_payment_date for existing loan debts if null
+    today_dt = datetime.now()
+    today_str = today_dt.strftime('%Y-%m-%d')
+    cursor.execute("SELECT id, due_day FROM debts WHERE next_payment_date IS NULL AND current_balance > 0 AND (interest_rate > 0 OR minimum_payment > 0);")
+    debts_no_date = cursor.fetchall()
+    for d in debts_no_date:
+        due_day = min(max(int(d['due_day'] or 1), 1), 28)
+        target = datetime(today_dt.year, today_dt.month, due_day)
+        if target.strftime('%Y-%m-%d') < today_str:
+            month = today_dt.month % 12 + 1
+            year = today_dt.year + (1 if today_dt.month == 12 else 0)
+            target = datetime(year, month, due_day)
+        cursor.execute("UPDATE debts SET next_payment_date = ? WHERE id = ?;", (target.strftime('%Y-%m-%d'), d['id']))
 
     # Upgrade existing DB data if needed
     cursor.execute("UPDATE categories SET expense_type = 'fixed' WHERE name IN ('Housing & Rent', 'Utilities & Internet');")

@@ -13,8 +13,10 @@ const Modal = {
     }
   },
 
-  open({ title, contentHTML, onSave, saveText = 'Save' }) {
+  open({ title, contentHTML, onSave, saveText = 'Save', size = 'default' }) {
     if (!this.backdropEl) this.init();
+
+    this.boxEl.className = 'modal-box' + (size === 'lg' || size === 'large' ? ' modal-lg' : '');
 
     this.boxEl.innerHTML = `
       <div class="modal-header">
@@ -59,6 +61,9 @@ const Modal = {
   close() {
     if (this.backdropEl) {
       this.backdropEl.classList.add('hidden');
+    }
+    if (this.boxEl) {
+      this.boxEl.className = 'modal-box';
     }
   }
 };

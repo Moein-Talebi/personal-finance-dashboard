@@ -12,7 +12,7 @@ const AccountsPage = {
 
       const formatCurrency = (val) => {
         const num = parseFloat(val || 0);
-        return (num < 0 ? '-' : '') + '€' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (num < 0 ? '-' : '') + 'â‚¬' + Math.abs(num).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       };
 
       const totalBalance = this.accounts.reduce((sum, a) => sum + a.balance, 0);

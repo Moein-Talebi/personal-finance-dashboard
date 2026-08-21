@@ -86,13 +86,26 @@ function initSchema() {
     CREATE TABLE IF NOT EXISTS debts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      type TEXT DEFAULT 'borrowed', -- borrowed (I owe), lent (someone owes me)
       total_amount REAL NOT NULL,
       current_balance REAL NOT NULL,
       interest_rate REAL DEFAULT 0.0,
       minimum_payment REAL DEFAULT 0.0,
       due_day INTEGER DEFAULT 1,
+      next_payment_date TEXT DEFAULT NULL,
       color TEXT DEFAULT '#EF4444',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS debt_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      debt_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      date TEXT NOT NULL,
+      account_id INTEGER,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE,
+      FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS deadlines (
@@ -114,6 +127,37 @@ function initSchema() {
   if (!hasExpenseType) {
     db.exec("ALTER TABLE categories ADD COLUMN expense_type TEXT DEFAULT 'variable';");
   }
+
+  // Ensure debts table has next_payment_date column
+  const debtInfo = db.prepare("PRAGMA table_info(debts)").all();
+  const hasNextPaymentDate = debtInfo.some(col => col.name === 'next_payment_date');
+  if (!hasNextPaymentDate) {
+    db.exec("ALTER TABLE debts ADD COLUMN next_payment_date TEXT DEFAULT NULL;");
+  }
+
+  // Ensure debts table has type column (borrowed vs lent)
+  const hasType = debtInfo.some(col => col.name === 'type');
+  if (!hasType) {
+    db.exec("ALTER TABLE debts ADD COLUMN type TEXT DEFAULT 'borrowed';");
+    db.exec("UPDATE debts SET type = 'borrowed' WHERE type IS NULL;");
+  }
+
+  // Clear next_payment_date for non-loan borrowed money (0% interest & 0 min payment)
+  db.exec("UPDATE debts SET next_payment_date = NULL WHERE (interest_rate IS NULL OR interest_rate = 0) AND (minimum_payment IS NULL OR minimum_payment = 0);");
+
+  // Auto-populate next_payment_date for existing loan debts if null
+  const debtsWithoutDate = db.prepare("SELECT id, due_day FROM debts WHERE next_payment_date IS NULL AND current_balance > 0 AND (interest_rate > 0 OR minimum_payment > 0)").all();
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  debtsWithoutDate.forEach(d => {
+    const dueDay = Math.min(Math.max(parseInt(d.due_day, 10) || 1, 1), 28);
+    let target = new Date(now.getFullYear(), now.getMonth(), dueDay);
+    if (target.toISOString().split('T')[0] < todayStr) {
+      target = new Date(now.getFullYear(), now.getMonth() + 1, dueDay);
+    }
+    const dateStr = target.toISOString().split('T')[0];
+    db.prepare("UPDATE debts SET next_payment_date = ? WHERE id = ?").run(dateStr, d.id);
+  });
 
   seedDefaultData();
 }

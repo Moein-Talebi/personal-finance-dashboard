@@ -282,7 +282,8 @@ app.get('/api/debts', (req, res) => {
 });
 
 app.post('/api/debts', (req, res) => {
-  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
+  const { name, type, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
+  const debtType = type === 'lent' ? 'lent' : 'borrowed';
   const currBal = current_balance !== undefined ? parseFloat(current_balance) : parseFloat(total_amount);
   const dueDayVal = parseInt(due_day || 1, 10);
   const rateVal = parseFloat(interest_rate || 0);
@@ -297,8 +298,8 @@ app.post('/api/debts', (req, res) => {
   }
 
   const debtId = executeSql(
-    "INSERT INTO debts (name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    [name, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || '#EF4444']
+    "INSERT INTO debts (name, type, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [name, debtType, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || (debtType === 'lent' ? '#10B981' : '#EF4444')]
   );
   const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
   debt.payments = [];
@@ -307,7 +308,8 @@ app.post('/api/debts', (req, res) => {
 
 app.put('/api/debts/:id', (req, res) => {
   const debtId = req.params.id;
-  const { name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
+  const { name, type, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color } = req.body;
+  const debtType = type === 'lent' ? 'lent' : 'borrowed';
   const currBal = parseFloat(current_balance || 0);
   const dueDayVal = parseInt(due_day || 1, 10);
   const rateVal = parseFloat(interest_rate || 0);
@@ -322,8 +324,8 @@ app.put('/api/debts/:id', (req, res) => {
   }
 
   executeSql(
-    "UPDATE debts SET name = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, next_payment_date = ?, color = ? WHERE id = ?",
-    [name, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || '#EF4444', debtId]
+    "UPDATE debts SET name = ?, type = ?, total_amount = ?, current_balance = ?, interest_rate = ?, minimum_payment = ?, due_day = ?, next_payment_date = ?, color = ? WHERE id = ?",
+    [name, debtType, parseFloat(total_amount || 0), currBal, rateVal, minVal, dueDayVal, nextDate || null, color || (debtType === 'lent' ? '#10B981' : '#EF4444'), debtId]
   );
   const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
   debt.payments = queryAll(`
@@ -341,6 +343,10 @@ function handleDebtPayment(debtId, amount, account_id, date, note, category_id) 
   const paymentDate = date || new Date().toISOString().split('T')[0];
   const paymentNote = note || '';
 
+  const debtBefore = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
+  const isLent = debtBefore && debtBefore.type === 'lent';
+  const debtName = debtBefore ? debtBefore.name : (isLent ? 'Lent Money' : 'Debt');
+
   executeSql("UPDATE debts SET current_balance = MAX(0, current_balance - ?) WHERE id = ?", [paymentAmt, debtId]);
 
   executeSql(
@@ -350,33 +356,49 @@ function handleDebtPayment(debtId, amount, account_id, date, note, category_id) 
 
   if (account_id) {
     let catId = category_id ? parseInt(category_id) : null;
-    if (!catId) {
-      const debtCat = queryOne("SELECT id FROM categories WHERE type = 'expense' AND (LOWER(name) LIKE '%debt%' OR LOWER(name) LIKE '%loan%');");
-      if (debtCat) {
-        catId = debtCat.id;
-      } else {
-        const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
-        catId = cats.length > 0 ? cats[0].id : 1;
+    if (isLent) {
+      // Money received from borrower -> Income transaction, credit account
+      if (!catId) {
+        const incomeCat = queryOne("SELECT id FROM categories WHERE type = 'income' AND (LOWER(name) LIKE '%loan%' OR LOWER(name) LIKE '%repayment%' OR LOWER(name) LIKE '%other%');");
+        if (incomeCat) {
+          catId = incomeCat.id;
+        } else {
+          const incCats = queryAll("SELECT id FROM categories WHERE type = 'income';");
+          catId = incCats.length > 0 ? incCats[0].id : 1;
+        }
       }
+
+      executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'income', ?, ?)",
+        [account_id, catId, paymentAmt, paymentDate, `Repayment Received: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
+      );
+      executeSql("UPDATE accounts SET balance = balance + ? WHERE id = ?", [paymentAmt, account_id]);
+    } else {
+      // Money paid towards debt -> Expense transaction, deduct from account
+      if (!catId) {
+        const debtCat = queryOne("SELECT id FROM categories WHERE type = 'expense' AND (LOWER(name) LIKE '%debt%' OR LOWER(name) LIKE '%loan%');");
+        if (debtCat) {
+          catId = debtCat.id;
+        } else {
+          const cats = queryAll("SELECT id FROM categories WHERE type = 'expense';");
+          catId = cats.length > 0 ? cats[0].id : 1;
+        }
+      }
+
+      executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
+        [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
+      );
+      executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
+      
+      // Ripple Effect: Check if payment triggers budget warning/exceeded notification
+      checkBudgetAlert(catId);
     }
-
-    const debt = queryOne("SELECT name FROM debts WHERE id = ?", [debtId]);
-    const debtName = debt ? debt.name : 'Debt';
-
-    executeSql("INSERT INTO transactions (account_id, category_id, amount, type, date, note) VALUES (?, ?, ?, 'expense', ?, ?)",
-      [account_id, catId, paymentAmt, paymentDate, `Debt Payment: ${debtName}${paymentNote ? ' - ' + paymentNote : ''}`]
-    );
-    executeSql("UPDATE accounts SET balance = balance - ? WHERE id = ?", [paymentAmt, account_id]);
-    
-    // Ripple Effect: Check if payment triggers budget warning/exceeded notification
-    checkBudgetAlert(catId);
   }
 
-  // Auto-advance next_payment_date if debt is still active and is a bank/installment loan
+  // Auto-advance next_payment_date if debt is still active and has scheduled payments
   const debt = queryOne("SELECT * FROM debts WHERE id = ?", [debtId]);
   if (debt) {
-    const isLoan = debt.interest_rate > 0 || debt.minimum_payment > 0;
-    if (debt.current_balance <= 0 || !isLoan) {
+    const hasSchedule = debt.interest_rate > 0 || debt.minimum_payment > 0 || debt.due_day > 1;
+    if (debt.current_balance <= 0 || !hasSchedule) {
       executeSql("UPDATE debts SET next_payment_date = NULL WHERE id = ?", [debtId]);
     } else if (debt.next_payment_date) {
       const advancedDate = advanceOneMonth(debt.next_payment_date);

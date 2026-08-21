@@ -86,6 +86,7 @@ function initSchema() {
     CREATE TABLE IF NOT EXISTS debts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      type TEXT DEFAULT 'borrowed', -- borrowed (I owe), lent (someone owes me)
       total_amount REAL NOT NULL,
       current_balance REAL NOT NULL,
       interest_rate REAL DEFAULT 0.0,
@@ -132,6 +133,13 @@ function initSchema() {
   const hasNextPaymentDate = debtInfo.some(col => col.name === 'next_payment_date');
   if (!hasNextPaymentDate) {
     db.exec("ALTER TABLE debts ADD COLUMN next_payment_date TEXT DEFAULT NULL;");
+  }
+
+  // Ensure debts table has type column (borrowed vs lent)
+  const hasType = debtInfo.some(col => col.name === 'type');
+  if (!hasType) {
+    db.exec("ALTER TABLE debts ADD COLUMN type TEXT DEFAULT 'borrowed';");
+    db.exec("UPDATE debts SET type = 'borrowed' WHERE type IS NULL;");
   }
 
   // Clear next_payment_date for non-loan borrowed money (0% interest & 0 min payment)

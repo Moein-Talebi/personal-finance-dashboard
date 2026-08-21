@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS debts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  type TEXT DEFAULT 'borrowed',
   total_amount REAL NOT NULL,
   current_balance REAL NOT NULL,
   interest_rate REAL DEFAULT 0.0,
@@ -267,13 +268,15 @@ Calculates 50/30/20 budget ratios: expected_income, survival_cost, fixed_needs, 
 
 #### Debts CRUD + Payments
 - GET /api/debts -> SELECT * ORDER BY current_balance DESC, with nested payments[] per debt
-- POST /api/debts -> INSERT {name, total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color}
+- POST /api/debts -> INSERT {name, type ('borrowed'|'lent'), total_amount, current_balance, interest_rate, minimum_payment, due_day, next_payment_date, color}
 - PUT /api/debts/:id -> UPDATE same fields
 - PUT/POST /api/debts/:id/payment -> Business logic:
   1. UPDATE debts SET current_balance = MAX(0, current_balance - amount)
   2. INSERT INTO debt_payments
-  3. If account_id provided: resolves category_id, creates expense transaction in `transactions`, deducts account balance in `accounts`, and invokes `checkBudgetAlert(cat_id)` to evaluate budget thresholds
-  4. Auto-advances `next_payment_date` by 1 month for bank/installment loans (`interest_rate > 0` or `minimum_payment > 0`) if remaining balance > 0, else sets NULL
+  3. If account_id provided:
+     - For `type === 'lent'` (Receivables): creates income transaction in `transactions`, increments account balance in `accounts`.
+     - For `type === 'borrowed'` (Debts): resolves category_id, creates expense transaction in `transactions`, deducts account balance in `accounts`, and invokes `checkBudgetAlert(cat_id)` to evaluate budget thresholds.
+  4. Auto-advances `next_payment_date` by 1 month for loans with schedule (`interest_rate > 0` or `minimum_payment > 0` or `due_day > 1`) if remaining balance > 0, else sets NULL
 - DELETE /api/debts/:id -> DELETE (cascades payments)
 
 #### Notifications

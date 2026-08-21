@@ -52,45 +52,49 @@
 
 ### Debt Modal
 - Title: 'Edit Debt: {name}' or 'Add Debt / Borrowed Money Record'
+- Mode Switching: `activeMode` ('borrowed' for Money I Owe vs 'lent' for Money Owed to Me)
 - Quick Setup Presets (only when adding new):
-  - `#preset-borrowed-friend`: "Borrowed from Friend (0% Interest)" -> rate=0, color=#3B82F6, clears next_payment_date
-  - `#preset-bank-loan`: "Bank Loan / Credit Card" -> rate=7.5, color=#EF4444, next_payment_date=today + 1 month
-- Fields: name, total borrowed, remaining balance, interest rate APR%, monthly installment target, due day (1-31), next payment date (YYYY-MM-DD, scoped to bank/installment loans), color
+  - `#preset-friend`: "Personal / Friend Loan (0%)" -> rate=0, color=#3B82F6/#10B981, clears next_payment_date
+  - `#preset-commercial`: "Bank Loan / Installment" -> rate=5.0/7.5, next_payment_date=today + 1 month
+- Fields: classification (`borrowed` vs `lent`), name (debt vs debtor), total amount, remaining balance, interest rate APR%, monthly target/repayment, due day (1-31), next payment/repayment date, color
 - Total input auto-syncs to balance input unless manually edited (`dataset.manual`)
 - Validation: name required, total > 0
 
-### Payment Modal
-- Title: 'Record Installment Payment: {name}'
-- Save text: 'Confirm Payment'
-- Shows debt summary (name, total borrowed, remaining balance)
-- Fields: payment amount (default: min(minimum_payment, current_balance)), date, paying account (select with cash/direct option), budget expense category (prefilled with debt/loan category), memo
+### Payment / Repayment Modal
+- Dynamic title: 'Record Installment Payment: {name}' or 'Record Repayment Received: {name}'
+- Save text: 'Confirm Payment' or 'Confirm & Deposit Repayment'
+- Shows summary (name, total, remaining balance)
+- Fields: amount, date, account (deducts on borrowed, deposits/credits on lent), category (expense vs income), memo
 - Validation: amount > 0
 - Overpayment check: if amount > current_balance + 0.01, confirms with user
 - After payment: sets `expandedHistories[id] = true` to auto-expand log, calls `window.updateNotificationBadges()` to update real-time alerts
 
 ### DOM Structure
 - Header with `#add-debt-btn`
+- **Mode Toggle Bar**:
+  - `[ Money I Owe (Debts) | Money Owed to Me (Receivables) ]`
 - **Hero Overview Summary Banner**:
-  - Left: Total Remaining Debt (large hero number with original amount), Overall Repayment Progress bar (% repaid and € paid down), Active accounts count, Monthly minimum obligation.
-  - Right: Short-term Cash Needed (Next 10 Days) highlight box with due countdown, urgent badge, and earliest due date.
+  - Left: Total Remaining / Owed to You (hero number), Overall Progress bar (% repaid/collected and € amount), Active count, Monthly obligation / expected inflow.
+  - Right: 10-Day Cash Window (Needed for Next 10 Days on Borrowed, Expected Inflow in Next 10 Days on Lent).
 - **Dedicated 10-Day Urgent Action Strip**:
-  - Horizontal quick-action pills for debts arriving within 10 days, showing days overdue/remaining, due date, amount, and direct 1-click "Pay" button.
+  - Horizontal quick-action pills for items arriving within 10 days with direct 1-click "Pay" (on borrowed) or "Receive" (on lent) button.
 - **Quick Filter Tabs**:
-  - All Debts, Due in 10 Days, Personal Loans (0% APR), Bank Loans (APR > 0), Paid Off.
-- **Debt cards grid (`.grid-cols-2`)**:
-  - Filtered dynamically based on the selected tab and sorted by date of arriving.
-  - Empty state with customized messages per filter tab.
-  - Each card: icon (landmark if APR>0, else hand-coins), name, APR badge, Paid Off badge (if balance<=0), edit/delete btns, remaining vs original, progress bar (success color), paid off %, installment target, next payment date status badge, toggle history btn, pay installment btn (disabled if paid off)
-  - Expandable history log: payment entries with date, source account, memo, negative green amount
+  - All Debts/Receivables, Due/Incoming in 10 Days, Personal Loans (0% APR), With Interest/Fees, Paid Off / Fully Collected.
+- **Cards Grid (`.grid-cols-2`)**:
+  - Filtered dynamically based on mode and tab, sorted by arrival date.
+  - Empty state with customized messages per filter tab and mode.
+  - Each card: landmark/hand-coins icon, name, APR badge, Paid Off / Fully Collected badge, edit/delete btns, remaining vs original, progress bar, paid/collected %, installment target, next arrival status badge, toggle history btn, action button (Pay Installment / Receive Repayment).
+  - Expandable history log: payment/repayment entries with date, account, memo, green + (received) or - (paid) amount.
 
 ### Computed Values
-- totalOriginalDebt: sum of total_amount
-- totalDebt: sum of current_balance
-- totalPaidDown: totalOriginalDebt - totalDebt
-- overallPct: round((totalPaidDown / totalOriginalDebt) * 100)
-- totalMinPayments: sum of minimum_payment
-- neededNext10Days: sum of required payments due within the next 10 days (including overdue)
-- currentFilter: active tab filter ('all', 'due10', 'personal', 'bank', 'paid')
+- totalOriginal: sum of total_amount in active mode
+- totalBalance: sum of current_balance in active mode
+- totalRepaid: totalOriginal - totalBalance
+- overallPct: round((totalRepaid / totalOriginal) * 100)
+- totalMonthlyMin: sum of minimum_payment in active mode
+- neededNext10Days: sum of required payments/repayments due within the next 10 days
+- activeMode: 'borrowed' | 'lent'
+- currentFilter: 'all' | 'due10' | 'personal' | 'bank' | 'paid'
 - isFullyPaid: current_balance <= 0
 - defaultPaymentAmount: min(minimum_payment, current_balance) or current_balance if no min
 

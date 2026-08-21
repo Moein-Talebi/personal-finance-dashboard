@@ -89,11 +89,13 @@ def init_db():
     CREATE TABLE IF NOT EXISTS debts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        type TEXT DEFAULT 'borrowed', -- borrowed (I owe), lent (someone owes me)
         total_amount REAL NOT NULL,
         current_balance REAL NOT NULL,
         interest_rate REAL DEFAULT 0.0,
         minimum_payment REAL DEFAULT 0.0,
         due_day INTEGER DEFAULT 1,
+        next_payment_date TEXT DEFAULT NULL,
         color TEXT DEFAULT '#EF4444',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -129,11 +131,14 @@ def init_db():
     if 'expense_type' not in cols:
         cursor.execute("ALTER TABLE categories ADD COLUMN expense_type TEXT DEFAULT 'variable';")
 
-    # Alter debts table if next_payment_date column missing
+    # Alter debts table if next_payment_date or type column missing
     cursor.execute("PRAGMA table_info(debts);")
     debt_cols = [r['name'] for r in cursor.fetchall()]
     if 'next_payment_date' not in debt_cols:
         cursor.execute("ALTER TABLE debts ADD COLUMN next_payment_date TEXT DEFAULT NULL;")
+    if 'type' not in debt_cols:
+        cursor.execute("ALTER TABLE debts ADD COLUMN type TEXT DEFAULT 'borrowed';")
+        cursor.execute("UPDATE debts SET type = 'borrowed' WHERE type IS NULL;")
 
     # Clear next_payment_date for non-loan borrowed money (0% interest & 0 min payment)
     cursor.execute("UPDATE debts SET next_payment_date = NULL WHERE (interest_rate IS NULL OR interest_rate = 0) AND (minimum_payment IS NULL OR minimum_payment = 0);")

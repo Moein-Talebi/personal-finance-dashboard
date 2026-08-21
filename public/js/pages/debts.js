@@ -502,9 +502,13 @@ const DebtTrackerPage = {
   },
 
   attachEvents(container) {
-    document.getElementById('add-debt-btn')?.addEventListener('click', () => this.openDebtModal(null, this.activeMode));
-
     container.addEventListener('click', async (e) => {
+      const addBtn = e.target.closest('#add-debt-btn');
+      if (addBtn) {
+        this.openDebtModal(null, this.activeMode);
+        return;
+      }
+
       const modeBtn = e.target.closest('.debt-mode-btn');
       if (modeBtn) {
         this.activeMode = modeBtn.getAttribute('data-mode');
@@ -540,7 +544,7 @@ const DebtTrackerPage = {
       if (editBtn) {
         const id = parseInt(editBtn.getAttribute('data-id'), 10);
         const debt = this.debts.find(d => d.id === id);
-        if (debt) this.openDebtModal(debt);
+        if (debt) this.openDebtModal(debt, debt.type || 'borrowed');
         return;
       }
 
@@ -559,25 +563,26 @@ const DebtTrackerPage = {
   openDebtModal(debt = null, defaultType = null) {
     const isEdit = !!debt;
     const initialType = debt ? (debt.type || 'borrowed') : (defaultType || this.activeMode || 'borrowed');
+    const isInitialLent = initialType === 'lent';
 
     const contentHTML = `
       <form id="debt-form">
         <!-- Type Switcher (I Borrowed vs I Lent) -->
         <div class="form-group" style="margin-bottom:1.25rem;">
           <label style="font-weight:700; margin-bottom:0.5rem; display:block;">Record Classification</label>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.5rem;">
-            <label style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0.85rem; border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; background:var(--bg-card);" id="type-borrowed-label">
-              <input type="radio" name="modal-debt-type" value="borrowed" ${initialType === 'borrowed' ? 'checked' : ''}>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem;">
+            <label id="type-borrowed-label" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 0.9rem; border:2px solid ${!isInitialLent ? 'var(--color-danger)' : 'var(--border-color)'}; background:${!isInitialLent ? 'rgba(239, 68, 68, 0.08)' : 'var(--bg-card)'}; border-radius:var(--radius-md); cursor:pointer; transition:all 0.2s ease;">
+              <input type="radio" name="modal-debt-type" value="borrowed" ${!isInitialLent ? 'checked' : ''} style="width:16px; height:16px; cursor:pointer;">
               <div>
                 <div style="font-weight:700; font-size:0.88rem; color:var(--color-danger);">Money I Borrowed</div>
-                <small style="color:var(--text-muted); font-size:0.75rem;">I owe money to someone / bank</small>
+                <small style="color:var(--text-muted); font-size:0.75rem; display:block; margin-top:0.1rem;">I owe money to someone / bank</small>
               </div>
             </label>
-            <label style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0.85rem; border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; background:var(--bg-card);" id="type-lent-label">
-              <input type="radio" name="modal-debt-type" value="lent" ${initialType === 'lent' ? 'checked' : ''}>
+            <label id="type-lent-label" style="display:flex; align-items:center; gap:0.6rem; padding:0.75rem 0.9rem; border:2px solid ${isInitialLent ? 'var(--color-success)' : 'var(--border-color)'}; background:${isInitialLent ? 'rgba(16, 185, 129, 0.08)' : 'var(--bg-card)'}; border-radius:var(--radius-md); cursor:pointer; transition:all 0.2s ease;">
+              <input type="radio" name="modal-debt-type" value="lent" ${isInitialLent ? 'checked' : ''} style="width:16px; height:16px; cursor:pointer;">
               <div>
                 <div style="font-weight:700; font-size:0.88rem; color:var(--color-success);">Money I Lent</div>
-                <small style="color:var(--text-muted); font-size:0.75rem;">Someone owes money to me</small>
+                <small style="color:var(--text-muted); font-size:0.75rem; display:block; margin-top:0.1rem;">Someone owes money to me</small>
               </div>
             </label>
           </div>
@@ -600,17 +605,17 @@ const DebtTrackerPage = {
         ` : ''}
 
         <div class="form-group">
-          <label id="lbl-debt-name">${initialType === 'lent' ? 'Borrower / Debtor Name' : 'Debt / Loan Name'}</label>
-          <input type="text" id="modal-debt-name" class="form-control" value="${debt ? debt.name : ''}" placeholder="${initialType === 'lent' ? 'e.g. Lent to Sarah, Alex Loan' : 'e.g. Borrowed from John, Car Loan'}" required>
+          <label id="lbl-debt-name">${isInitialLent ? 'Borrower / Debtor Name' : 'Debt / Loan Name'}</label>
+          <input type="text" id="modal-debt-name" class="form-control" value="${debt ? debt.name : ''}" placeholder="${isInitialLent ? 'e.g. Lent to Sarah, Alex Loan' : 'e.g. Borrowed from John, Car Loan'}" required>
         </div>
 
         <div class="form-row">
           <div class="form-group">
-            <label id="lbl-debt-total">${initialType === 'lent' ? 'Total Amount Lent (€)' : 'Total Borrowed / Original Amount (€)'}</label>
+            <label id="lbl-debt-total">${isInitialLent ? 'Total Amount Lent (€)' : 'Total Borrowed / Original Amount (€)'}</label>
             <input type="number" step="0.01" id="modal-debt-total" class="form-control" value="${debt ? debt.total_amount : ''}" placeholder="1000.00" required>
           </div>
           <div class="form-group">
-            <label id="lbl-debt-balance">${initialType === 'lent' ? 'Current Remaining Owed to You (€)' : 'Current Remaining Balance (€)'}</label>
+            <label id="lbl-debt-balance">${isInitialLent ? 'Current Remaining Owed to You (€)' : 'Current Remaining Balance (€)'}</label>
             <input type="number" step="0.01" id="modal-debt-balance" class="form-control" value="${debt ? debt.current_balance : ''}" placeholder="1000.00" required>
           </div>
         </div>
@@ -618,12 +623,12 @@ const DebtTrackerPage = {
         <div class="form-row">
           <div class="form-group">
             <label>Interest Rate (% APR)</label>
-            <input type="number" step="0.1" id="modal-debt-rate" class="form-control" value="${debt ? debt.interest_rate : 0}" placeholder="0 for friend/family loans">
-            <small style="color:var(--text-muted); font-size:0.75rem;">Leave 0 for personal loans</small>
+            <input type="number" step="0.1" id="modal-debt-rate" class="form-control" value="${debt ? debt.interest_rate : 0}" placeholder="0 for personal loans">
+            <small style="color:var(--text-muted); font-size:0.75rem;">Leave 0 for 0% personal loans</small>
           </div>
           <div class="form-group">
-            <label id="lbl-debt-min">${initialType === 'lent' ? 'Expected Monthly Repayment (€)' : 'Target Monthly Installment (€)'}</label>
-            <input type="number" step="0.01" id="modal-debt-min" class="form-control" value="${debt ? debt.minimum_payment : 0}" placeholder="Optional installment target">
+            <label id="lbl-debt-min">${isInitialLent ? 'Expected Monthly Repayment (€)' : 'Target Monthly Installment (€)'}</label>
+            <input type="number" step="0.01" id="modal-debt-min" class="form-control" value="${debt ? debt.minimum_payment : 0}" placeholder="Optional monthly target">
           </div>
         </div>
 
@@ -633,7 +638,7 @@ const DebtTrackerPage = {
             <input type="number" min="1" max="31" id="modal-debt-day" class="form-control" value="${debt ? debt.due_day : 1}">
           </div>
           <div class="form-group">
-            <label id="lbl-debt-date">${initialType === 'lent' ? 'Next Expected Repayment Date' : 'Next Payment Date'}</label>
+            <label id="lbl-debt-date">${isInitialLent ? 'Next Expected Repayment Date' : 'Next Payment Date'}</label>
             <input type="date" id="modal-debt-next-date" class="form-control" value="${debt && debt.next_payment_date ? debt.next_payment_date : ''}">
             <small style="color:var(--text-muted); font-size:0.75rem;">Date of upcoming payment</small>
           </div>
@@ -641,17 +646,19 @@ const DebtTrackerPage = {
 
         <div class="form-group">
           <label>Color Theme</label>
-          <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : (initialType === 'lent' ? '#10B981' : '#EF4444')}" style="height:42px; padding:0.2rem;">
+          <input type="color" id="modal-debt-color" class="form-control" value="${debt ? debt.color : (isInitialLent ? '#10B981' : '#EF4444')}" style="height:42px; padding:0.2rem;">
         </div>
       </form>
     `;
 
     Modal.open({
-      title: isEdit ? `Edit Record: ${debt.name}` : (initialType === 'lent' ? 'Add Lent Money Record' : 'Add Debt Record'),
+      title: isEdit 
+        ? `Edit Record: ${debt.name}` 
+        : (isInitialLent ? 'Add Lent Money Record' : 'Add Debt / Borrowed Money Record'),
       contentHTML,
       onSave: async () => {
         const typeEl = document.querySelector('input[name="modal-debt-type"]:checked');
-        const type = typeEl ? typeEl.value : 'borrowed';
+        const type = typeEl ? typeEl.value : (initialType || 'borrowed');
         const name = document.getElementById('modal-debt-name').value;
         const total_amount = parseFloat(document.getElementById('modal-debt-total').value || 0);
         let current_balance_val = document.getElementById('modal-debt-balance').value;
@@ -676,6 +683,7 @@ const DebtTrackerPage = {
         }
 
         this.activeMode = type;
+        this.currentFilter = 'all';
         const container = document.getElementById('page-content');
         this.render(container);
         return true;
@@ -687,6 +695,8 @@ const DebtTrackerPage = {
     typeRadios.forEach(radio => {
       radio.addEventListener('change', (e) => {
         const isLent = e.target.value === 'lent';
+        const borrowedLbl = document.getElementById('type-borrowed-label');
+        const lentLbl = document.getElementById('type-lent-label');
         const nameLbl = document.getElementById('lbl-debt-name');
         const totalLbl = document.getElementById('lbl-debt-total');
         const balanceLbl = document.getElementById('lbl-debt-balance');
@@ -694,6 +704,25 @@ const DebtTrackerPage = {
         const dateLbl = document.getElementById('lbl-debt-date');
         const nameInput = document.getElementById('modal-debt-name');
         const colorInput = document.getElementById('modal-debt-color');
+        const modalTitle = document.querySelector('.modal-header h3');
+
+        if (borrowedLbl && lentLbl) {
+          if (isLent) {
+            lentLbl.style.border = '2px solid var(--color-success)';
+            lentLbl.style.background = 'rgba(16, 185, 129, 0.08)';
+            borrowedLbl.style.border = '2px solid var(--border-color)';
+            borrowedLbl.style.background = 'var(--bg-card)';
+          } else {
+            borrowedLbl.style.border = '2px solid var(--color-danger)';
+            borrowedLbl.style.background = 'rgba(239, 68, 68, 0.08)';
+            lentLbl.style.border = '2px solid var(--border-color)';
+            lentLbl.style.background = 'var(--bg-card)';
+          }
+        }
+
+        if (modalTitle && !isEdit) {
+          modalTitle.textContent = isLent ? 'Add Lent Money Record' : 'Add Debt / Borrowed Money Record';
+        }
 
         if (nameLbl) nameLbl.textContent = isLent ? 'Borrower / Debtor Name' : 'Debt / Loan Name';
         if (totalLbl) totalLbl.textContent = isLent ? 'Total Amount Lent (€)' : 'Total Borrowed / Original Amount (€)';

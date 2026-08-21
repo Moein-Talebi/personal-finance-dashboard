@@ -583,22 +583,40 @@ def check_debt_payment_alerts():
         diff_days = (due_dt - today_dt).days
         amount_val = d['minimum_payment'] if d['minimum_payment'] > 0 else d['current_balance']
         amount_str = f"€{amount_val:.2f}"
+        is_lent = d.get('type') == 'lent'
 
-        if diff_days < 0:
-            msg = f"{d['name']} payment of {amount_str} was due on {d['next_payment_date']}"
-            existing = query_one("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", (msg,))
-            if not existing:
-                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", (msg,))
-        elif diff_days == 0:
-            msg = f"{d['name']} payment of {amount_str} is due today"
-            existing = query_one("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", (msg,))
-            if not existing:
-                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", (msg,))
-        elif diff_days <= 3:
-            msg = f"{d['name']} payment of {amount_str} is due in {diff_days} day(s) on {d['next_payment_date']}"
-            existing = query_one("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", (msg,))
-            if not existing:
-                execute_sql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", (msg,))
+        if is_lent:
+            if diff_days < 0:
+                msg = f"Expected repayment of {amount_str} from {d['name']} was due on {d['next_payment_date']}"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Overdue Loan Repayment' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Loan Repayment', ?)", (msg,))
+            elif diff_days == 0:
+                msg = f"Expected repayment of {amount_str} from {d['name']} is due today"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Loan Repayment Due Today' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Loan Repayment Due Today', ?)", (msg,))
+            elif diff_days <= 3:
+                msg = f"Expected repayment of {amount_str} from {d['name']} is due in {diff_days} day(s) on {d['next_payment_date']}"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Upcoming Loan Repayment' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Loan Repayment', ?)", (msg,))
+        else:
+            if diff_days < 0:
+                msg = f"{d['name']} payment of {amount_str} was due on {d['next_payment_date']}"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", (msg,))
+            elif diff_days == 0:
+                msg = f"{d['name']} payment of {amount_str} is due today"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", (msg,))
+            elif diff_days <= 3:
+                msg = f"{d['name']} payment of {amount_str} is due in {diff_days} day(s) on {d['next_payment_date']}"
+                existing = query_one("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", (msg,))
+                if not existing:
+                    execute_sql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", (msg,))
 
     return {"status": 404, "data": {"error": "Endpoint not found"}}
 
@@ -628,9 +646,10 @@ def check_budget_alert(category_id):
 def get_dashboard_summary():
     accts = query_all("SELECT balance FROM accounts;")
     total_assets = sum(a['balance'] for a in accts if a['balance'] > 0)
-    debts = query_all("SELECT current_balance FROM debts;")
-    total_debt = sum(d['current_balance'] for d in debts)
-    net_worth = total_assets - total_debt
+    debts = query_all("SELECT current_balance, type FROM debts;")
+    total_debt = sum(d['current_balance'] for d in debts if d.get('type', 'borrowed') == 'borrowed')
+    total_receivables = sum(d['current_balance'] for d in debts if d.get('type') == 'lent')
+    net_worth = total_assets + total_receivables - total_debt
 
     current_month = datetime.now().strftime('%Y-%m')
     txs_month = query_all("SELECT type, amount FROM transactions WHERE date LIKE ?;", (f"{current_month}%",))
@@ -745,8 +764,8 @@ def get_needs_calculator_data():
     var_budget = sum(c['budget_limit'] for c in cats if c['expense_type'] == 'variable')
     disc_budget = sum(c['budget_limit'] for c in cats if c['expense_type'] == 'discretionary')
 
-    # Debt minimum payments
-    debts = query_all("SELECT * FROM debts;")
+    # Debt minimum payments (exclude money lent to others)
+    debts = query_all("SELECT * FROM debts WHERE (type IS NULL OR type = 'borrowed');")
     debt_minimums = sum(d['minimum_payment'] for d in debts)
 
     # Actual spending per expense_type this month

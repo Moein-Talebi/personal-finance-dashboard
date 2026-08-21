@@ -48,9 +48,10 @@ function checkBudgetAlert(categoryId) {
 app.get('/api/dashboard', (req, res) => {
   const accts = queryAll("SELECT balance FROM accounts;");
   const totalAssets = accts.reduce((sum, a) => sum + (a.balance > 0 ? a.balance : 0), 0);
-  const debts = queryAll("SELECT current_balance FROM debts;");
-  const totalDebt = debts.reduce((sum, d) => sum + d.current_balance, 0);
-  const netWorth = totalAssets - totalDebt;
+  const debts = queryAll("SELECT current_balance, type FROM debts;");
+  const totalDebt = debts.filter(d => (d.type || 'borrowed') === 'borrowed').reduce((sum, d) => sum + d.current_balance, 0);
+  const totalReceivables = debts.filter(d => d.type === 'lent').reduce((sum, d) => sum + d.current_balance, 0);
+  const netWorth = totalAssets + totalReceivables - totalDebt;
 
   const currentMonth = new Date().toISOString().substring(0, 7);
   const txsMonth = queryAll("SELECT type, amount FROM transactions WHERE date LIKE ?;", [`${currentMonth}%`]);
@@ -161,7 +162,7 @@ app.get('/api/needs-calculator', (req, res) => {
   const varBudget = cats.filter(c => c.expense_type === 'variable').reduce((sum, c) => sum + c.budget_limit, 0);
   const discBudget = cats.filter(c => c.expense_type === 'discretionary').reduce((sum, c) => sum + c.budget_limit, 0);
 
-  const debts = queryAll("SELECT * FROM debts;");
+  const debts = queryAll("SELECT * FROM debts WHERE (type IS NULL OR type = 'borrowed');");
   const debtMinimums = debts.reduce((sum, d) => sum + d.minimum_payment, 0);
 
   let fixedActual = 0;
@@ -240,27 +241,50 @@ function checkDebtPaymentAlerts() {
   const todayMs = new Date(todayStr).getTime();
 
   for (const d of debts) {
+    const isLent = d.type === 'lent';
     const dueMs = new Date(d.next_payment_date).getTime();
     const diffDays = Math.round((dueMs - todayMs) / (1000 * 60 * 60 * 24));
     const amountStr = `€${(d.minimum_payment > 0 ? d.minimum_payment : d.current_balance).toFixed(2)}`;
 
-    if (diffDays < 0) {
-      const msg = `${d.name} payment of ${amountStr} was due on ${d.next_payment_date}`;
-      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", [msg]);
-      if (!existing) {
-        executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", [msg]);
+    if (isLent) {
+      if (diffDays < 0) {
+        const msg = `Expected repayment of ${amountStr} from ${d.name} was due on ${d.next_payment_date}`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Overdue Loan Repayment' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Loan Repayment', ?)", [msg]);
+        }
+      } else if (diffDays === 0) {
+        const msg = `Expected repayment of ${amountStr} from ${d.name} is due today`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Loan Repayment Due Today' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Loan Repayment Due Today', ?)", [msg]);
+        }
+      } else if (diffDays <= 3) {
+        const msg = `Expected repayment of ${amountStr} from ${d.name} is due in ${diffDays} day(s) on ${d.next_payment_date}`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Upcoming Loan Repayment' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Loan Repayment', ?)", [msg]);
+        }
       }
-    } else if (diffDays === 0) {
-      const msg = `${d.name} payment of ${amountStr} is due today`;
-      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", [msg]);
-      if (!existing) {
-        executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", [msg]);
-      }
-    } else if (diffDays <= 3) {
-      const msg = `${d.name} payment of ${amountStr} is due in ${diffDays} day(s) on ${d.next_payment_date}`;
-      const existing = queryOne("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", [msg]);
-      if (!existing) {
-        executeSql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", [msg]);
+    } else {
+      if (diffDays < 0) {
+        const msg = `${d.name} payment of ${amountStr} was due on ${d.next_payment_date}`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Overdue Debt Payment' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Overdue Debt Payment', ?)", [msg]);
+        }
+      } else if (diffDays === 0) {
+        const msg = `${d.name} payment of ${amountStr} is due today`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Debt Payment Due Today' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('alert', 'Debt Payment Due Today', ?)", [msg]);
+        }
+      } else if (diffDays <= 3) {
+        const msg = `${d.name} payment of ${amountStr} is due in ${diffDays} day(s) on ${d.next_payment_date}`;
+        const existing = queryOne("SELECT id FROM notifications WHERE title = 'Upcoming Debt Payment' AND message = ?", [msg]);
+        if (!existing) {
+          executeSql("INSERT INTO notifications (type, title, message) VALUES ('bill', 'Upcoming Debt Payment', ?)", [msg]);
+        }
       }
     }
   }
